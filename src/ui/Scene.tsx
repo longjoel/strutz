@@ -1,4 +1,5 @@
 import { useRef, useCallback, useState, useEffect } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import * as THREE from "three";
 import { ThreeEvent, useThree } from "@react-three/fiber";
 import type { Tool } from "./types";
@@ -270,17 +271,13 @@ function decomposeRunLength(runLength: number): number[] | null {
   return best.get(runLength) ?? null;
 }
 
-function createRootScene(): SceneData {
-  const root = createNode({ x: 0, y: 0, z: 0 });
-  return { nodes: { [root.id]: root }, struts: {}, accessories: {} };
-}
-
 interface SceneProps {
   activeTool: Tool;
+  sceneData: SceneData;
+  setSceneData: Dispatch<SetStateAction<SceneData>>;
 }
 
-export function Scene({ activeTool }: SceneProps) {
-  const [sceneData, setSceneData] = useState<SceneData>(createRootScene);
+export function Scene({ activeTool, sceneData, setSceneData }: SceneProps) {
   const [drawState, setDrawState] = useState<{
     fromNodeId: string;
     fromFace: FaceName;
@@ -991,23 +988,6 @@ export function Scene({ activeTool }: SceneProps) {
         }
       }
 
-      setSceneData((prev) => {
-        const newNodes = { ...prev.nodes };
-        for (const id of fd.selectedIds) {
-          const ref = nodeRefs.current.get(id);
-          if (ref) {
-            newNodes[id] = {
-              ...newNodes[id],
-              position: {
-                x: ref.position.x,
-                y: ref.position.y,
-                z: ref.position.z,
-              },
-            };
-          }
-        }
-        return { ...prev, nodes: newNodes };
-      });
     },
     [camera, gl],
   );

@@ -1,14 +1,18 @@
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls, Grid, GizmoHelper, GizmoViewport } from "@react-three/drei";
 import * as THREE from "three";
+import type { Dispatch, SetStateAction } from "react";
 import type { Tool } from "./types";
+import type { SceneData } from "../core/types";
 import { Scene } from "./Scene";
 
 interface ViewportProps {
   activeTool: Tool;
+  sceneData: SceneData;
+  setSceneData: Dispatch<SetStateAction<SceneData>>;
 }
 
-export function Viewport({ activeTool }: ViewportProps) {
+export function Viewport({ activeTool, sceneData, setSceneData }: ViewportProps) {
   return (
     <div
       style={{ flex: 1, position: "relative" }}
@@ -41,7 +45,7 @@ export function Viewport({ activeTool }: ViewportProps) {
           position={[0.5, 0, 0.5]}
         />
 
-        <Scene activeTool={activeTool} />
+        <Scene activeTool={activeTool} sceneData={sceneData} setSceneData={setSceneData} />
 
         <OrbitControls
           makeDefault

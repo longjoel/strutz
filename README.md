@@ -10,6 +10,9 @@ Strutz is an experimental 3D construction editor for building node-and-strut ass
 - Subdivide straight struts by inserting nodes.
 - Select and drag nodes along face directions.
 - Right-click nodes or struts to delete them.
+- Undo/redo scene edits.
+- Save/open scenes as JSON.
+- Export scenes as JSON or OBJ.
 - Orbit the camera with left-drag, middle-drag, or the viewport gizmo.
 
 ## Getting Started
@@ -44,6 +47,9 @@ npm run typecheck
 - `S`: Draw strut mode
 - `A`: Accessory mode
 - `Esc`: Clear selection or cancel drawing
+- `Ctrl+Z`: Undo
+- `Ctrl+Shift+Z`/`Ctrl+Y`: Redo
+- `Ctrl+S`: Save JSON
 - `Delete`/`Backspace`: Delete selected nodes
 - Right-click a node: delete that node and attached struts/accessories
 - Right-click a strut: delete only that strut

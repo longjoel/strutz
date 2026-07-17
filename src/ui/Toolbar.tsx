@@ -10,9 +10,30 @@ const TOOLS: { id: Tool; label: string; shortcut: string }[] = [
 interface ToolbarProps {
   activeTool: Tool;
   onSelectTool: (tool: Tool) => void;
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
+  onSave: () => void;
+  onSaveAs: () => void;
+  onOpen: () => void;
+  onExportJson: () => void;
+  onExportObj: () => void;
 }
 
-export function Toolbar({ activeTool, onSelectTool }: ToolbarProps) {
+export function Toolbar({
+  activeTool,
+  onSelectTool,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
+  onSave,
+  onSaveAs,
+  onOpen,
+  onExportJson,
+  onExportObj,
+}: ToolbarProps) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return;
@@ -58,7 +79,65 @@ export function Toolbar({ activeTool, onSelectTool }: ToolbarProps) {
           {toolIcon(tool.id)}
         </button>
       ))}
+      <div style={{ height: 1, background: "#0f3460", margin: "6px 6px" }} />
+      <ToolbarButton title="Undo (Ctrl+Z)" onClick={onUndo} disabled={!canUndo}>
+        U
+      </ToolbarButton>
+      <ToolbarButton title="Redo (Ctrl+Shift+Z)" onClick={onRedo} disabled={!canRedo}>
+        R
+      </ToolbarButton>
+      <ToolbarButton title="Save (Ctrl+S)" onClick={onSave}>
+        S
+      </ToolbarButton>
+      <ToolbarButton title="Save As" onClick={onSaveAs}>
+        SA
+      </ToolbarButton>
+      <ToolbarButton title="Open" onClick={onOpen}>
+        O
+      </ToolbarButton>
+      <ToolbarButton title="Export JSON" onClick={onExportJson}>
+        EJ
+      </ToolbarButton>
+      <ToolbarButton title="Export OBJ" onClick={onExportObj}>
+        EO
+      </ToolbarButton>
     </div>
+  );
+}
+
+function ToolbarButton({
+  title,
+  disabled,
+  onClick,
+  children,
+}: {
+  title: string;
+  disabled?: boolean;
+  onClick: () => void;
+  children: string;
+}) {
+  return (
+    <button
+      title={title}
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        width: 40,
+        height: 32,
+        margin: "0 auto",
+        border: "1px solid #0f3460",
+        borderRadius: 6,
+        background: disabled ? "#111827" : "#16213e",
+        color: disabled ? "#64748b" : "#e0e0e0",
+        cursor: disabled ? "default" : "pointer",
+        fontSize: 11,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      {children}
+    </button>
   );
 }
 
