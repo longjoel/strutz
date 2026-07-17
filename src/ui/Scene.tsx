@@ -1,9 +1,18 @@
-import { useRef, useCallback, useState, useEffect } from "react";
+import { useRef, useCallback, useState, useEffect, useMemo } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import * as THREE from "three";
 import { ThreeEvent, useThree } from "@react-three/fiber";
 import type { Tool } from "./types";
-import type { SceneData, NodeData, StrutData, FaceName, StrutKind } from "../core/types";
+import type {
+  SceneData,
+  NodeData,
+  StrutData,
+  PanelData,
+  WidgetData,
+  WidgetKind,
+  FaceName,
+  StrutKind,
+} from "../core/types";
 import {
   createNode,
   addNodeToScene,
@@ -11,11 +20,30 @@ import {
   canConnectStrut,
   addStrutToScene,
   removeStrutFromScene,
+  createPanelFromStruts,
+  addPanelToScene,
+  removePanelFromScene,
+  flipPanelInScene,
+  getPanelBoundaryPoints,
+  addWidgetToScene,
+  removeWidgetFromScene,
+  rotateWidgetInScene,
   getAttachmentWorldPosition,
   hasNodeContact,
 } from "../core/scene";
 import { snapToGrid } from "../core/snap";
 import { nodeSize, strutWidth, VALID_STRUT_LENGTHS, oppositeFace } from "../core/constants";
+import {
+  FACE_NORMALS as RULE_FACE_NORMALS,
+  centerSpacingForStrutLength,
+  corner45LengthFromAxisDelta,
+  faceAxis,
+  getCoplanarPlane,
+  getCorner45PlaneNormal as getRuleCorner45PlaneNormal,
+  getStrutRoutePoints as getRuleStrutRoutePoints,
+  insetCoplanarPolygon,
+  offsetPlanePoints,
+} from "../core/rules";
 
 const FACE_COLORS: Record<string, string> = {
   top: "#4ecca3",
@@ -26,17 +54,17 @@ const FACE_COLORS: Record<string, string> = {
   left: "#1abc9c",
 };
 
-const FACE_NORMALS: Record<string, [number, number, number]> = {
-  top: [0, 1, 0],
-  bottom: [0, -1, 0],
-  front: [0, 0, 1],
-  back: [0, 0, -1],
-  right: [1, 0, 0],
-  left: [-1, 0, 0],
+const FACE_NORMALS: Record<FaceName, [number, number, number]> = {
+  top: [RULE_FACE_NORMALS.top.x, RULE_FACE_NORMALS.top.y, RULE_FACE_NORMALS.top.z],
+  bottom: [RULE_FACE_NORMALS.bottom.x, RULE_FACE_NORMALS.bottom.y, RULE_FACE_NORMALS.bottom.z],
+  front: [RULE_FACE_NORMALS.front.x, RULE_FACE_NORMALS.front.y, RULE_FACE_NORMALS.front.z],
+  back: [RULE_FACE_NORMALS.back.x, RULE_FACE_NORMALS.back.y, RULE_FACE_NORMALS.back.z],
+  right: [RULE_FACE_NORMALS.right.x, RULE_FACE_NORMALS.right.y, RULE_FACE_NORMALS.right.z],
+  left: [RULE_FACE_NORMALS.left.x, RULE_FACE_NORMALS.left.y, RULE_FACE_NORMALS.left.z],
 };
 
 const FACE_ENTRIES = Object.entries(FACE_NORMALS) as [
-  string,
+  FaceName,
   [number, number, number],
 ][];
 
@@ -51,15 +79,6 @@ const NORMAL_TO_FACE: Record<string, FaceName> = {
 
 function vec3ToThree(v: { x: number; y: number; z: number }): THREE.Vector3 {
   return new THREE.Vector3(v.x, v.y, v.z);
-}
-
-function faceNormalToThree(face: FaceName): THREE.Vector3 {
-  const normal = FACE_NORMALS[face];
-  return new THREE.Vector3(normal[0], normal[1], normal[2]);
-}
-
-function centerSpacingForStrutLength(length: number): number {
-  return length + nodeSize;
 }
 
 function getDrawCandidatePosition(
@@ -102,22 +121,6 @@ function faceFromDelta(delta: THREE.Vector3): FaceName | null {
   if (ay > 0 && ax === 0 && az === 0) return delta.y > 0 ? "top" : "bottom";
   if (az > 0 && ax === 0 && ay === 0) return delta.z > 0 ? "front" : "back";
   return null;
-}
-
-function faceAxis(face: FaceName): "x" | "y" | "z" {
-  if (face === "left" || face === "right") return "x";
-  if (face === "top" || face === "bottom") return "y";
-  return "z";
-}
-
-function corner45LengthFromAxisDelta(axisDelta: number): number {
-  const rawLength = Math.abs(axisDelta);
-  const rawMatch = VALID_STRUT_LENGTHS.find((length) => Math.abs(rawLength - length) < 0.01);
-  if (rawMatch !== undefined) return rawMatch;
-
-  const faceLength = rawLength - nodeSize;
-  const faceMatch = VALID_STRUT_LENGTHS.find((length) => Math.abs(faceLength - length) < 0.01);
-  return faceMatch ?? rawLength;
 }
 
 function getConnectionFacesBetweenNodes(
@@ -273,17 +276,21 @@ function decomposeRunLength(runLength: number): number[] | null {
 
 interface SceneProps {
   activeTool: Tool;
+  selectedWidgetKind: WidgetKind;
   sceneData: SceneData;
   setSceneData: Dispatch<SetStateAction<SceneData>>;
 }
 
-export function Scene({ activeTool, sceneData, setSceneData }: SceneProps) {
+export function Scene({ activeTool, selectedWidgetKind, sceneData, setSceneData }: SceneProps) {
   const [drawState, setDrawState] = useState<{
     fromNodeId: string;
     fromFace: FaceName;
   } | null>(null);
   const [hoverDrawLength, setHoverDrawLength] = useState<number | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectedStrutIds, setSelectedStrutIds] = useState<Set<string>>(new Set());
+  const [selectedPanelIds, setSelectedPanelIds] = useState<Set<string>>(new Set());
+  const [selectedWidgetIds, setSelectedWidgetIds] = useState<Set<string>>(new Set());
   const nodeRefs = useRef<Map<string, THREE.Group>>(new Map());
   const sceneDataRef = useRef(sceneData);
   sceneDataRef.current = sceneData;
@@ -457,6 +464,9 @@ export function Scene({ activeTool, sceneData, setSceneData }: SceneProps) {
     (event: ThreeEvent<MouseEvent>) => {
       if (activeTool === "select") {
         setSelectedIds(new Set());
+        setSelectedStrutIds(new Set());
+        setSelectedPanelIds(new Set());
+        setSelectedWidgetIds(new Set());
         return;
       }
 
@@ -510,6 +520,11 @@ export function Scene({ activeTool, sceneData, setSceneData }: SceneProps) {
           }
           return next;
         });
+        if (!event.nativeEvent.shiftKey) {
+          setSelectedStrutIds(new Set());
+          setSelectedPanelIds(new Set());
+          setSelectedWidgetIds(new Set());
+        }
         return;
       }
 
@@ -606,8 +621,20 @@ export function Scene({ activeTool, sceneData, setSceneData }: SceneProps) {
           }
         }
       }
+
+      if (activeTool === "place-widget" && face) {
+        event.stopPropagation();
+        const widget: WidgetData = {
+          id: crypto.randomUUID(),
+          kind: selectedWidgetKind,
+          nodeId,
+          face,
+          rotation: 0,
+        };
+        setSceneData((prev) => addWidgetToScene(prev, widget));
+      }
     },
-    [activeTool, drawState, commitStrut],
+    [activeTool, drawState, commitStrut, selectedWidgetKind],
   );
 
   const handleNodeContextMenu = useCallback(
@@ -635,6 +662,11 @@ export function Scene({ activeTool, sceneData, setSceneData }: SceneProps) {
       event.nativeEvent.preventDefault();
 
       setSceneData((prev) => removeStrutFromScene(prev, strutId));
+      setSelectedStrutIds((prev) => {
+        const next = new Set(prev);
+        next.delete(strutId);
+        return next;
+      });
       setDrawState(null);
     },
     [],
@@ -642,6 +674,27 @@ export function Scene({ activeTool, sceneData, setSceneData }: SceneProps) {
 
   const handleStrutClick = useCallback(
     (strutId: string, point: THREE.Vector3, event: ThreeEvent<MouseEvent>) => {
+      if (activeTool === "select") {
+        event.stopPropagation();
+        setSelectedStrutIds((prev) => {
+          const next = new Set(prev);
+          if (event.nativeEvent.shiftKey) {
+            if (next.has(strutId)) next.delete(strutId);
+            else next.add(strutId);
+          } else {
+            next.clear();
+            next.add(strutId);
+          }
+          return next;
+        });
+        if (!event.nativeEvent.shiftKey) {
+          setSelectedIds(new Set());
+          setSelectedPanelIds(new Set());
+          setSelectedWidgetIds(new Set());
+        }
+        return;
+      }
+
       if (activeTool !== "draw-strut") return;
       event.stopPropagation();
 
@@ -777,6 +830,84 @@ export function Scene({ activeTool, sceneData, setSceneData }: SceneProps) {
       setDrawState(null);
     },
     [activeTool],
+  );
+
+  const handlePanelClick = useCallback(
+    (panelId: string, event: ThreeEvent<MouseEvent>) => {
+      if (activeTool !== "select") return;
+
+      event.stopPropagation();
+      setSelectedPanelIds((prev) => {
+        const next = new Set(prev);
+        if (event.nativeEvent.shiftKey) {
+          if (next.has(panelId)) next.delete(panelId);
+          else next.add(panelId);
+        } else {
+          next.clear();
+          next.add(panelId);
+        }
+        return next;
+      });
+      if (!event.nativeEvent.shiftKey) {
+        setSelectedIds(new Set());
+        setSelectedStrutIds(new Set());
+        setSelectedWidgetIds(new Set());
+      }
+    },
+    [activeTool],
+  );
+
+  const handlePanelContextMenu = useCallback(
+    (panelId: string, event: ThreeEvent<MouseEvent>) => {
+      event.stopPropagation();
+      event.nativeEvent.preventDefault();
+
+      setSceneData((prev) => removePanelFromScene(prev, panelId));
+      setSelectedPanelIds((prev) => {
+        const next = new Set(prev);
+        next.delete(panelId);
+        return next;
+      });
+    },
+    [],
+  );
+
+  const handleWidgetClick = useCallback(
+    (widgetId: string, event: ThreeEvent<MouseEvent>) => {
+      if (activeTool !== "select") return;
+      event.stopPropagation();
+      setSelectedWidgetIds((prev) => {
+        const next = new Set(prev);
+        if (event.nativeEvent.shiftKey) {
+          if (next.has(widgetId)) next.delete(widgetId);
+          else next.add(widgetId);
+        } else {
+          next.clear();
+          next.add(widgetId);
+        }
+        return next;
+      });
+      if (!event.nativeEvent.shiftKey) {
+        setSelectedIds(new Set());
+        setSelectedStrutIds(new Set());
+        setSelectedPanelIds(new Set());
+      }
+    },
+    [activeTool],
+  );
+
+  const handleWidgetContextMenu = useCallback(
+    (widgetId: string, event: ThreeEvent<MouseEvent>) => {
+      event.stopPropagation();
+      event.nativeEvent.preventDefault();
+      setSceneData((prev) => removeWidgetFromScene(prev, widgetId));
+      setSelectedWidgetIds((prev) => {
+        const next = new Set(prev);
+        next.delete(widgetId);
+        return next;
+      });
+    },
+    [],
   );
 
   const startFaceDragRef = useRef<(face: FaceName, e: PointerEvent) => void>(() => {});
@@ -1076,26 +1207,80 @@ export function Scene({ activeTool, sceneData, setSceneData }: SceneProps) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
       if (e.key === "Delete" || e.key === "Backspace") {
-        if (selectedIds.size === 0) return;
+        if (
+          selectedIds.size === 0 && selectedStrutIds.size === 0 &&
+          selectedPanelIds.size === 0 && selectedWidgetIds.size === 0
+        ) return;
         e.preventDefault();
         setSceneData((prev) => {
           let result = prev;
           for (const id of selectedIds) {
             result = removeNodeFromScene(result, id);
           }
+          for (const id of selectedStrutIds) {
+            result = removeStrutFromScene(result, id);
+          }
+          for (const id of selectedPanelIds) {
+            result = removePanelFromScene(result, id);
+          }
+          for (const id of selectedWidgetIds) {
+            result = removeWidgetFromScene(result, id);
+          }
           return result;
         });
         setSelectedIds(new Set());
+        setSelectedStrutIds(new Set());
+        setSelectedPanelIds(new Set());
+        setSelectedWidgetIds(new Set());
       }
 
       if (e.key === "Escape") {
         setDrawState(null);
         setSelectedIds(new Set());
+        setSelectedStrutIds(new Set());
+        setSelectedPanelIds(new Set());
+        setSelectedWidgetIds(new Set());
+      }
+
+      if (activeTool === "select" && e.key.toLowerCase() === "f" && selectedPanelIds.size > 0) {
+        e.preventDefault();
+        setSceneData((prev) => {
+          let result = prev;
+          for (const id of selectedPanelIds) {
+            result = flipPanelInScene(result, id);
+          }
+          return result;
+        });
+      }
+
+      if (activeTool === "select" && e.key.toLowerCase() === "r" && selectedWidgetIds.size > 0) {
+        e.preventDefault();
+        setSceneData((prev) => {
+          let result = prev;
+          for (const id of selectedWidgetIds) {
+            result = rotateWidgetInScene(result, id);
+          }
+          return result;
+        });
+      }
+
+      if (activeTool === "select" && e.key.toLowerCase() === "p") {
+        if (selectedStrutIds.size < 3) return;
+        e.preventDefault();
+        setSceneData((prev) => {
+          const panel = createPanelFromStruts(prev, [...selectedStrutIds]);
+          if (!panel) {
+            window.alert("Panels require one closed loop of at least three coplanar struts.");
+            return prev;
+          }
+
+          return addPanelToScene(prev, panel);
+        });
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [selectedIds]);
+  }, [activeTool, selectedIds, selectedPanelIds, selectedStrutIds, selectedWidgetIds]);
 
   const anySelected = selectedIds.size > 0;
 
@@ -1128,7 +1313,7 @@ export function Scene({ activeTool, sceneData, setSceneData }: SceneProps) {
         );
       },
     };
-  }, [selectedIds, drawState]);
+  }, [selectedIds, selectedStrutIds, selectedPanelIds, selectedWidgetIds, drawState]);
 
   return (
     <group>
@@ -1144,6 +1329,28 @@ export function Scene({ activeTool, sceneData, setSceneData }: SceneProps) {
           onPickCorner45={placeCorner45Strut}
         />
       )}
+
+      {Object.values(sceneData.panels ?? {}).map((panel) => (
+        <PanelMesh
+          key={panel.id}
+          panel={panel}
+          sceneData={sceneData}
+          selected={selectedPanelIds.has(panel.id)}
+          onClick={handlePanelClick}
+          onContextMenu={handlePanelContextMenu}
+        />
+      ))}
+
+      {Object.values(sceneData.widgets ?? {}).map((widget) => (
+        <WidgetMesh
+          key={widget.id}
+          widget={widget}
+          sceneData={sceneData}
+          selected={selectedWidgetIds.has(widget.id)}
+          onClick={handleWidgetClick}
+          onContextMenu={handleWidgetContextMenu}
+        />
+      ))}
 
       {Object.values(sceneData.nodes).map((node) => (
         <NodeMesh
@@ -1170,6 +1377,7 @@ export function Scene({ activeTool, sceneData, setSceneData }: SceneProps) {
           key={strut.id}
           strut={strut}
           sceneData={sceneData}
+          selected={selectedStrutIds.has(strut.id)}
           onClick={handleStrutClick}
           onContextMenu={handleStrutContextMenu}
         />
@@ -1297,10 +1505,14 @@ function DrawPreview({
           faceB: candidate.toFace,
           length: candidate.length,
         };
-        const fromPos = vec3ToThree(getAttachmentWorldPosition(sceneData, strut.nodeA, strut.faceA));
-        const toFaceNormal = faceNormalToThree(candidate.toFace);
-        const toPos = candidate.position.clone().add(toFaceNormal.multiplyScalar(nodeSize / 2));
-        const routePoints = getStrutRoutePoints(strut, fromPos, toPos);
+        const routePoints = getRuleStrutRoutePoints({
+          nodeA: sourceNode.position,
+          faceA: strut.faceA,
+          nodeB: candidate.position,
+          faceB: strut.faceB,
+          kind: strut.kind,
+        }).map(vec3ToThree);
+        const flatNormal = vec3ToThree(getRuleCorner45PlaneNormal(strut.faceA, strut.faceB));
 
         return (
           <group
@@ -1323,10 +1535,22 @@ function DrawPreview({
                 from={point}
                 to={routePoints[index + 1]}
                 halfWidth={halfWidth}
+                flatNormal={flatNormal}
                 onClick={(event: ThreeEvent<MouseEvent>) => {
                   event.stopPropagation();
                   onPickCorner45(candidate);
                 }}
+              />
+            ))}
+            {routePoints.slice(1, -1).map((point, index) => (
+              <CornerJointFill
+                key={`fill-${index}`}
+                position={point}
+                halfWidth={halfWidth}
+                flatNormal={flatNormal}
+                color="#38d9c7"
+                transparent
+                opacity={0.62}
               />
             ))}
             {routePoints.map((point, index) => (
@@ -1351,22 +1575,22 @@ function PreviewRouteSegment({
   from,
   to,
   halfWidth,
+  flatNormal,
   onClick,
 }: {
   from: THREE.Vector3;
   to: THREE.Vector3;
   halfWidth: number;
+  flatNormal?: THREE.Vector3;
   onClick: (event: ThreeEvent<MouseEvent>) => void;
 }) {
   const direction = new THREE.Vector3().subVectors(to, from);
   const rawLength = direction.length();
   if (rawLength < 0.01) return null;
 
+  const unitDirection = direction.normalize();
   const midPoint = new THREE.Vector3().addVectors(from, to).multiplyScalar(0.5);
-  const quaternion = new THREE.Quaternion().setFromUnitVectors(
-    new THREE.Vector3(0, 1, 0),
-    direction.normalize(),
-  );
+  const quaternion = getSegmentQuaternion(unitDirection, flatNormal);
 
   return (
     <>
@@ -1574,6 +1798,7 @@ function NodeMesh({
           activeTool={activeTool}
           draggable={selected && activeTool === "select"}
           drawable={activeTool === "draw-strut"}
+          widgetable={activeTool === "place-widget" && !isOccupied(name)}
           onFaceKnobClick={(e) => handleFaceKnobClick(name as FaceName, e)}
           onFaceDrawClick={(e) => onNodeClick(node.id, name as FaceName, e)}
         />
@@ -1591,6 +1816,7 @@ interface FaceIndicatorProps {
   activeTool: Tool;
   draggable: boolean;
   drawable: boolean;
+  widgetable: boolean;
   onFaceKnobClick: (e: ThreeEvent<MouseEvent>) => void;
   onFaceDrawClick: (e: ThreeEvent<MouseEvent>) => void;
 }
@@ -1604,6 +1830,7 @@ function FaceIndicator({
   activeTool,
   draggable,
   drawable,
+  widgetable,
   onFaceKnobClick,
   onFaceDrawClick,
 }: FaceIndicatorProps) {
@@ -1625,6 +1852,8 @@ function FaceIndicator({
       ? 0.3
       : activeTool === "draw-strut"
         ? 0.8
+        : activeTool === "place-widget"
+          ? 0.8
         : draggable
           ? 0.7
           : 0.3;
@@ -1640,7 +1869,7 @@ function FaceIndicator({
           ? (e: ThreeEvent<MouseEvent>) => {
               onFaceKnobClick(e);
             }
-          : drawable
+          : drawable || widgetable
             ? (e: ThreeEvent<MouseEvent>) => {
                 onFaceDrawClick(e);
               }
@@ -1656,23 +1885,169 @@ function FaceIndicator({
 interface StrutMeshProps {
   strut: StrutData;
   sceneData: SceneData;
+  selected: boolean;
   onClick: (strutId: string, point: THREE.Vector3, event: ThreeEvent<MouseEvent>) => void;
   onContextMenu: (strutId: string, event: ThreeEvent<MouseEvent>) => void;
 }
 
-function StrutMesh({ strut, sceneData, onClick, onContextMenu }: StrutMeshProps) {
+function PanelMesh({
+  panel,
+  sceneData,
+  selected,
+  onClick,
+  onContextMenu,
+}: {
+  panel: PanelData;
+  sceneData: SceneData;
+  selected: boolean;
+  onClick: (panelId: string, event: ThreeEvent<MouseEvent>) => void;
+  onContextMenu: (panelId: string, event: ThreeEvent<MouseEvent>) => void;
+}) {
+  const geometry = useMemo(() => {
+    const points = getPanelBoundaryPoints(sceneData, panel.strutIds);
+    if (!points) return null;
+
+    const plane = getCoplanarPlane(points);
+    if (!plane) return null;
+
+    const panelPoints = offsetPlanePoints(
+      insetCoplanarPolygon(points, plane.normal, strutWidth / 2),
+      plane.normal,
+      panel.side === "bottom" ? -strutWidth / 2 : strutWidth / 2,
+    );
+    if (panelPoints.length < 3) return null;
+
+    const vertices = new Float32Array(panelPoints.flatMap((point) => [point.x, point.y, point.z]));
+    const indices: number[] = [];
+    for (let i = 1; i < panelPoints.length - 1; i += 1) {
+      indices.push(0, i, i + 1);
+    }
+
+    const nextGeometry = new THREE.BufferGeometry();
+    nextGeometry.setAttribute("position", new THREE.BufferAttribute(vertices, 3));
+    nextGeometry.setIndex(indices);
+    nextGeometry.computeVertexNormals();
+    return nextGeometry;
+  }, [panel.strutIds, sceneData]);
+
+  useEffect(() => () => geometry?.dispose(), [geometry]);
+
+  if (!geometry) return null;
+
+  return (
+    <mesh
+      geometry={geometry}
+      renderOrder={-1}
+      onClick={(event) => onClick(panel.id, event)}
+      onContextMenu={(event) => onContextMenu(panel.id, event)}
+    >
+      <meshStandardMaterial
+        color={selected ? "#e9a040" : "#88a6b8"}
+        side={THREE.DoubleSide}
+      />
+    </mesh>
+  );
+}
+
+function WidgetMesh({
+  widget,
+  sceneData,
+  selected,
+  onClick,
+  onContextMenu,
+}: {
+  widget: WidgetData;
+  sceneData: SceneData;
+  selected: boolean;
+  onClick: (widgetId: string, event: ThreeEvent<MouseEvent>) => void;
+  onContextMenu: (widgetId: string, event: ThreeEvent<MouseEvent>) => void;
+}) {
+  const node = sceneData.nodes[widget.nodeId];
+  if (!node) return null;
+
+  const normal = FACE_NORMALS[widget.face];
+  const outward = new THREE.Vector3(...normal);
+  const align = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), outward);
+  const roll = new THREE.Quaternion().setFromAxisAngle(outward, widget.rotation * Math.PI / 2);
+  const quaternion = roll.multiply(align);
+  const position = getAttachmentWorldPosition(sceneData, widget.nodeId, widget.face);
+  const color = selected ? "#e9a040" : "#4ecca3";
+
+  return (
+    <group
+      position={[position.x, position.y, position.z]}
+      quaternion={quaternion}
+      onClick={(event) => onClick(widget.id, event)}
+      onContextMenu={(event) => onContextMenu(widget.id, event)}
+    >
+      {widget.kind === "antenna" && <AntennaWidget color={color} />}
+      {widget.kind === "rocket-engine" && <RocketEngineWidget color={color} />}
+      {widget.kind === "cockpit" && <CockpitWidget color={color} />}
+    </group>
+  );
+}
+
+function AntennaWidget({ color }: { color: string }) {
+  return (
+    <group>
+      <mesh position={[0, 0.5, 0]} castShadow>
+        <cylinderGeometry args={[0.09, 0.09, 1]} />
+        <meshStandardMaterial color={color} />
+      </mesh>
+      <mesh position={[0, 1.08, 0]} castShadow>
+        <coneGeometry args={[0.18, 0.3, 12]} />
+        <meshStandardMaterial color="#d7e7f0" />
+      </mesh>
+    </group>
+  );
+}
+
+function RocketEngineWidget({ color }: { color: string }) {
+  return (
+    <group>
+      <mesh position={[0, 0.32, 0]} castShadow>
+        <cylinderGeometry args={[0.33, 0.28, 0.64, 16]} />
+        <meshStandardMaterial color={color} />
+      </mesh>
+      <mesh position={[0, 0.82, 0]} rotation={[Math.PI, 0, 0]} castShadow>
+        <coneGeometry args={[0.38, 0.48, 16]} />
+        <meshStandardMaterial color="#697b88" />
+      </mesh>
+    </group>
+  );
+}
+
+function CockpitWidget({ color }: { color: string }) {
+  return (
+    <group>
+      <mesh position={[0, 0.32, 0]} castShadow>
+        <boxGeometry args={[0.8, 0.64, 0.72]} />
+        <meshStandardMaterial color={color} />
+      </mesh>
+      <mesh position={[0, 0.67, 0.08]} rotation={[0, Math.PI / 4, 0]} castShadow>
+        <coneGeometry args={[0.43, 0.34, 4]} />
+        <meshStandardMaterial color="#86b9d0" metalness={0.15} roughness={0.28} />
+      </mesh>
+    </group>
+  );
+}
+
+function StrutMesh({ strut, sceneData, selected, onClick, onContextMenu }: StrutMeshProps) {
   const nodeA = sceneData.nodes[strut.nodeA];
   const nodeB = sceneData.nodes[strut.nodeB];
   if (!nodeA || !nodeB) return null;
 
-  const fromPos = vec3ToThree(
-    getAttachmentWorldPosition(sceneData, strut.nodeA, strut.faceA),
-  );
-  const toPos = vec3ToThree(
-    getAttachmentWorldPosition(sceneData, strut.nodeB, strut.faceB),
-  );
   const halfWidth = strutWidth / 2;
-  const routePoints = getStrutRoutePoints(strut, fromPos, toPos);
+  const routePoints = getRuleStrutRoutePoints({
+    nodeA: nodeA.position,
+    faceA: strut.faceA,
+    nodeB: nodeB.position,
+    faceB: strut.faceB,
+    kind: strut.kind,
+  }).map(vec3ToThree);
+  const flatNormal = strut.kind === "corner45"
+    ? vec3ToThree(getRuleCorner45PlaneNormal(strut.faceA, strut.faceB))
+    : undefined;
 
   return (
     <group>
@@ -1682,9 +2057,19 @@ function StrutMesh({ strut, sceneData, onClick, onContextMenu }: StrutMeshProps)
           from={point}
           to={routePoints[index + 1]}
           halfWidth={halfWidth}
-          color={strut.kind === "corner45" ? "#718f7d" : "#667799"}
+          flatNormal={flatNormal}
+          color={selected ? "#e9a040" : strut.kind === "corner45" ? "#718f7d" : "#667799"}
           onClick={(event) => onClick(strut.id, event.point.clone(), event)}
           onContextMenu={(event) => onContextMenu(strut.id, event)}
+        />
+      ))}
+      {strut.kind === "corner45" && routePoints.slice(1, -1).map((point, index) => (
+        <CornerJointFill
+          key={`fill-${index}`}
+          position={point}
+          halfWidth={halfWidth}
+          flatNormal={flatNormal}
+          color="#718f7d"
         />
       ))}
       {routePoints.map((point, index) => (
@@ -1697,28 +2082,81 @@ function StrutMesh({ strut, sceneData, onClick, onContextMenu }: StrutMeshProps)
   );
 }
 
-function getStrutRoutePoints(
-  strut: StrutData,
-  fromPos: THREE.Vector3,
-  toPos: THREE.Vector3,
-): THREE.Vector3[] {
-  if (strut.kind !== "corner45") {
-    return [fromPos, toPos];
+function CornerJointFill({
+  position,
+  halfWidth,
+  flatNormal,
+  color,
+  transparent = false,
+  opacity = 1,
+}: {
+  position: THREE.Vector3;
+  halfWidth: number;
+  flatNormal?: THREE.Vector3;
+  color: string;
+  transparent?: boolean;
+  opacity?: number;
+}) {
+  const quaternion = getJointFillQuaternion(flatNormal);
+
+  return (
+    <mesh position={position} quaternion={quaternion}>
+      <boxGeometry args={[halfWidth * 2, halfWidth * 2, halfWidth * 2]} />
+      <meshStandardMaterial
+        color={color}
+        flatShading={true}
+        transparent={transparent}
+        opacity={opacity}
+        depthWrite={!transparent}
+      />
+    </mesh>
+  );
+}
+
+function getSegmentQuaternion(
+  direction: THREE.Vector3,
+  flatNormal?: THREE.Vector3,
+): THREE.Quaternion {
+  const yAxis = direction.clone().normalize();
+  if (flatNormal && flatNormal.lengthSq() > 0.0001) {
+    let zAxis = flatNormal.clone().normalize();
+
+    if (Math.abs(zAxis.dot(yAxis)) > 0.999) {
+      zAxis = Math.abs(yAxis.y) > 0.95
+        ? new THREE.Vector3(1, 0, 0)
+        : new THREE.Vector3(0, 1, 0);
+    }
+
+    const xAxis = new THREE.Vector3().crossVectors(yAxis, zAxis).normalize();
+    zAxis = new THREE.Vector3().crossVectors(xAxis, yAxis).normalize();
+
+    return new THREE.Quaternion().setFromRotationMatrix(
+      new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis),
+    );
   }
 
-  const stubLength = nodeSize / 2;
-  return [
-    fromPos,
-    fromPos.clone().add(faceNormalToThree(strut.faceA).multiplyScalar(stubLength)),
-    toPos.clone().add(faceNormalToThree(strut.faceB).multiplyScalar(stubLength)),
-    toPos,
-  ];
+  return new THREE.Quaternion().setFromUnitVectors(
+    new THREE.Vector3(0, 1, 0),
+    yAxis,
+  );
+}
+
+function getJointFillQuaternion(flatNormal?: THREE.Vector3): THREE.Quaternion {
+  if (!flatNormal || flatNormal.lengthSq() < 0.0001) {
+    return new THREE.Quaternion();
+  }
+
+  return new THREE.Quaternion().setFromUnitVectors(
+    new THREE.Vector3(0, 0, 1),
+    flatNormal.clone().normalize(),
+  );
 }
 
 function StrutSegmentMesh({
   from,
   to,
   halfWidth,
+  flatNormal,
   color,
   onClick,
   onContextMenu,
@@ -1726,6 +2164,7 @@ function StrutSegmentMesh({
   from: THREE.Vector3;
   to: THREE.Vector3;
   halfWidth: number;
+  flatNormal?: THREE.Vector3;
   color: string;
   onClick: (event: ThreeEvent<MouseEvent>) => void;
   onContextMenu: (event: ThreeEvent<MouseEvent>) => void;
@@ -1734,12 +2173,10 @@ function StrutSegmentMesh({
   const rawLength = direction.length();
   if (rawLength < 0.01) return null;
 
+  const unitDirection = direction.normalize();
   const midPoint = new THREE.Vector3().addVectors(from, to).multiplyScalar(0.5);
   const length = Math.max(rawLength, 0.1);
-  const quaternion = new THREE.Quaternion().setFromUnitVectors(
-    new THREE.Vector3(0, 1, 0),
-    direction.normalize(),
-  );
+  const quaternion = getSegmentQuaternion(unitDirection, flatNormal);
 
   return (
     <>

@@ -10,7 +10,7 @@ export type StrutKind = "straight" | "corner45";
 export interface AttachmentState {
   occupied: boolean;
   occupantId?: string;
-  occupantType?: "strut" | "accessory";
+  occupantType?: "strut" | "widget";
 }
 
 export type Attachments = Record<FaceName, AttachmentState>;
@@ -31,6 +31,12 @@ export interface StrutData {
   length: number;
 }
 
+export interface PanelData {
+  id: string;
+  strutIds: string[];
+  side?: "top" | "bottom";
+}
+
 export interface AccessoryData {
   id: string;
   nodeId: string;
@@ -47,8 +53,21 @@ export interface AccessoryDefinition {
   color: string;
 }
 
+export type WidgetKind = "antenna" | "rocket-engine" | "cockpit";
+
+export interface WidgetData {
+  id: string;
+  kind: WidgetKind;
+  nodeId: string;
+  face: FaceName;
+  rotation: number;
+}
+
 export interface SceneData {
   nodes: Record<string, NodeData>;
   struts: Record<string, StrutData>;
-  accessories: Record<string, AccessoryData>;
+  panels: Record<string, PanelData>;
+  widgets: Record<string, WidgetData>;
+  /** Legacy input only. normalizeSceneAttachments migrates these to widgets. */
+  accessories?: Record<string, AccessoryData>;
 }

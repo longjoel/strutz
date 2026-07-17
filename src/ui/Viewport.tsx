@@ -3,16 +3,17 @@ import { OrbitControls, Grid, GizmoHelper, GizmoViewport } from "@react-three/dr
 import * as THREE from "three";
 import type { Dispatch, SetStateAction } from "react";
 import type { Tool } from "./types";
-import type { SceneData } from "../core/types";
+import type { SceneData, WidgetKind } from "../core/types";
 import { Scene } from "./Scene";
 
 interface ViewportProps {
   activeTool: Tool;
+  selectedWidgetKind: WidgetKind;
   sceneData: SceneData;
   setSceneData: Dispatch<SetStateAction<SceneData>>;
 }
 
-export function Viewport({ activeTool, sceneData, setSceneData }: ViewportProps) {
+export function Viewport({ activeTool, selectedWidgetKind, sceneData, setSceneData }: ViewportProps) {
   return (
     <div
       style={{ flex: 1, position: "relative" }}
@@ -45,7 +46,12 @@ export function Viewport({ activeTool, sceneData, setSceneData }: ViewportProps)
           position={[0.5, 0, 0.5]}
         />
 
-        <Scene activeTool={activeTool} sceneData={sceneData} setSceneData={setSceneData} />
+        <Scene
+          activeTool={activeTool}
+          selectedWidgetKind={selectedWidgetKind}
+          sceneData={sceneData}
+          setSceneData={setSceneData}
+        />
 
         <OrbitControls
           makeDefault

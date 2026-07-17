@@ -1,10 +1,25 @@
 import { nodeSize, strutWidth } from "./constants";
-import { createNode, getAttachmentWorldPosition } from "./scene";
-import type { FaceName, SceneData, Vec3 } from "./types";
+import { createNode, getPanelBoundaryPoints } from "./scene";
+import {
+  cross,
+  dot,
+  faceNormal,
+  getAttachmentPosition,
+  getCorner45PlaneNormal,
+  getCoplanarPlane,
+  getStrutRoutePoints,
+  insetCoplanarPolygon,
+  length,
+  normalize,
+  offsetPlanePoints,
+  scale,
+  sub,
+} from "./rules";
+import type { FaceName, SceneData, Vec3, WidgetData } from "./types";
 
 export function createRootScene(): SceneData {
   const root = createNode({ x: 0, y: 0, z: 0 });
-  return { nodes: { [root.id]: root }, struts: {}, accessories: {} };
+  return { nodes: { [root.id]: root }, struts: {}, panels: {}, widgets: {} };
 }
 
 export function exportSceneJson(scene: SceneData): string {
@@ -21,35 +36,58 @@ export function exportSceneObj(scene: SceneData): string {
   }
 
   for (const strut of Object.values(scene.struts)) {
+    const nodeA = scene.nodes[strut.nodeA];
+    const nodeB = scene.nodes[strut.nodeB];
+    if (!nodeA || !nodeB) continue;
+
     builder.object(`strut_${strut.id}`);
-    const route = getStrutRoute(scene, strut.nodeA, strut.faceA, strut.nodeB, strut.faceB, strut.kind);
+    const route = getStrutRoutePoints({
+      nodeA: nodeA.position,
+      faceA: strut.faceA,
+      nodeB: nodeB.position,
+      faceB: strut.faceB,
+      kind: strut.kind,
+    });
+    const flatNormal = strut.kind === "corner45"
+      ? getCorner45PlaneNormal(strut.faceA, strut.faceB)
+      : undefined;
     for (let i = 0; i < route.length - 1; i += 1) {
-      builder.addSegmentBox(route[i], route[i + 1], strutWidth);
+      builder.addSegmentBox(route[i], route[i + 1], strutWidth, flatNormal);
+    }
+
+    if (strut.kind === "corner45") {
+      for (let i = 1; i < route.length - 1; i += 1) {
+        builder.addAxisAlignedBox(route[i], strutWidth, strutWidth, strutWidth);
+      }
     }
   }
 
+  for (const panel of Object.values(scene.panels ?? {})) {
+    const points = getPanelBoundaryPoints(scene, panel.strutIds);
+    if (!points) continue;
+    const plane = getCoplanarPlane(points);
+    if (!plane) continue;
+
+    const panelPoints = offsetPlanePoints(
+      insetCoplanarPolygon(points, plane.normal, strutWidth / 2),
+      plane.normal,
+      panel.side === "bottom" ? -strutWidth / 2 : strutWidth / 2,
+    );
+    if (panelPoints.length < 3) continue;
+
+    builder.object(`panel_${panel.id}`);
+    builder.addPanelFace(panelPoints);
+  }
+
+  for (const widget of Object.values(scene.widgets ?? {})) {
+    const node = scene.nodes[widget.nodeId];
+    if (!node) continue;
+
+    builder.object(`widget_${widget.kind}_${widget.id}`);
+    addWidgetToObj(builder, widget, node.position);
+  }
+
   return builder.toString();
-}
-
-function getStrutRoute(
-  scene: SceneData,
-  nodeA: string,
-  faceA: FaceName,
-  nodeB: string,
-  faceB: FaceName,
-  kind = "straight",
-): Vec3[] {
-  const from = getAttachmentWorldPosition(scene, nodeA, faceA);
-  const to = getAttachmentWorldPosition(scene, nodeB, faceB);
-  if (kind !== "corner45") return [from, to];
-
-  const stub = nodeSize / 2;
-  return [
-    from,
-    add(from, scale(faceNormal(faceA), stub)),
-    add(to, scale(faceNormal(faceB), stub)),
-    to,
-  ];
 }
 
 class ObjBuilder {
@@ -80,11 +118,16 @@ class ObjBuilder {
     ]);
   }
 
-  addSegmentBox(from: Vec3, to: Vec3, width: number) {
+  addSegmentBox(
+    from: Vec3,
+    to: Vec3,
+    width: number,
+    flatNormal?: Vec3,
+  ) {
     const dir = normalize(sub(to, from));
     if (length(dir) < 0.01) return;
 
-    const reference = Math.abs(dir.y) > 0.95 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+    const reference = getSegmentReference(dir, flatNormal);
     const right = normalize(cross(dir, reference));
     const up = normalize(cross(right, dir));
     const half = width / 2;
@@ -101,6 +144,27 @@ class ObjBuilder {
       add(add(to, r), u),
       add(add(to, scale(r, -1)), u),
     ]);
+  }
+
+  addOrientedBox(center: Vec3, xAxis: Vec3, yAxis: Vec3, zAxis: Vec3, sx: number, sy: number, sz: number) {
+    const hx = scale(xAxis, sx / 2);
+    const hy = scale(yAxis, sy / 2);
+    const hz = scale(zAxis, sz / 2);
+    const point = (x: number, y: number, z: number) => add(add(add(center, scale(hx, x)), scale(hy, y)), scale(hz, z));
+    this.addBoxVertices([
+      point(-1, -1, -1), point(1, -1, -1), point(1, 1, -1), point(-1, 1, -1),
+      point(-1, -1, 1), point(1, -1, 1), point(1, 1, 1), point(-1, 1, 1),
+    ]);
+  }
+
+  addPanelFace(vertices: Vec3[]) {
+    const start = this.vertexOffset;
+    for (const vertex of vertices) {
+      this.lines.push(`v ${formatNumber(vertex.x)} ${formatNumber(vertex.y)} ${formatNumber(vertex.z)}`);
+    }
+
+    this.lines.push(`f ${vertices.map((_, index) => start + index).join(" ")}`);
+    this.vertexOffset += vertices.length;
   }
 
   private addBoxVertices(vertices: Vec3[]) {
@@ -123,51 +187,55 @@ class ObjBuilder {
   }
 }
 
-function faceNormal(face: FaceName): Vec3 {
-  switch (face) {
-    case "top":
-      return { x: 0, y: 1, z: 0 };
-    case "bottom":
-      return { x: 0, y: -1, z: 0 };
-    case "front":
-      return { x: 0, y: 0, z: 1 };
-    case "back":
-      return { x: 0, y: 0, z: -1 };
-    case "right":
-      return { x: 1, y: 0, z: 0 };
-    case "left":
-      return { x: -1, y: 0, z: 0 };
+function addWidgetToObj(builder: ObjBuilder, widget: WidgetData, nodePosition: Vec3) {
+  const axes = getWidgetAxes(widget.face, widget.rotation);
+  const anchor = getAttachmentPosition(nodePosition, widget.face);
+  const center = (x: number, y: number, z: number) => add(
+    add(add(anchor, scale(axes.x, x)), scale(axes.y, y)),
+    scale(axes.z, z),
+  );
+
+  switch (widget.kind) {
+    case "antenna":
+      builder.addOrientedBox(center(0, 0.5, 0), axes.x, axes.y, axes.z, 0.18, 1, 0.18);
+      builder.addOrientedBox(center(0, 1.08, 0), axes.x, axes.y, axes.z, 0.3, 0.3, 0.3);
+      break;
+    case "rocket-engine":
+      builder.addOrientedBox(center(0, 0.32, 0), axes.x, axes.y, axes.z, 0.6, 0.64, 0.6);
+      builder.addOrientedBox(center(0, 0.82, 0), axes.x, axes.y, axes.z, 0.76, 0.48, 0.76);
+      break;
+    case "cockpit":
+      builder.addOrientedBox(center(0, 0.32, 0), axes.x, axes.y, axes.z, 0.8, 0.64, 0.72);
+      builder.addOrientedBox(center(0, 0.67, 0.08), axes.x, axes.y, axes.z, 0.62, 0.34, 0.5);
+      break;
   }
+}
+
+function getWidgetAxes(face: FaceName, rotation: number): { x: Vec3; y: Vec3; z: Vec3 } {
+  const y = faceNormal(face);
+  const reference = Math.abs(y.y) > 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+  const baseX = normalize(cross(reference, y));
+  const baseZ = normalize(cross(y, baseX));
+  const angle = (rotation % 4) * Math.PI / 2;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return {
+    x: add(scale(baseX, cos), scale(baseZ, sin)),
+    y,
+    z: add(scale(baseZ, cos), scale(baseX, -sin)),
+  };
+}
+
+function getSegmentReference(dir: Vec3, flatNormal?: Vec3): Vec3 {
+  if (flatNormal && length(flatNormal) > 0.0001 && Math.abs(dot(dir, flatNormal)) < 0.999) {
+    return flatNormal;
+  }
+
+  return Math.abs(dir.y) > 0.95 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
 }
 
 function add(a: Vec3, b: Vec3): Vec3 {
   return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
-}
-
-function sub(a: Vec3, b: Vec3): Vec3 {
-  return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
-}
-
-function scale(v: Vec3, s: number): Vec3 {
-  return { x: v.x * s, y: v.y * s, z: v.z * s };
-}
-
-function cross(a: Vec3, b: Vec3): Vec3 {
-  return {
-    x: a.y * b.z - a.z * b.y,
-    y: a.z * b.x - a.x * b.z,
-    z: a.x * b.y - a.y * b.x,
-  };
-}
-
-function length(v: Vec3): number {
-  return Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-}
-
-function normalize(v: Vec3): Vec3 {
-  const len = length(v);
-  if (len < 0.0001) return { x: 0, y: 0, z: 0 };
-  return { x: v.x / len, y: v.y / len, z: v.z / len };
 }
 
 function formatNumber(n: number): string {

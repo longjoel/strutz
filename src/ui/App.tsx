@@ -3,8 +3,10 @@ import { Viewport } from "./Viewport";
 import { Toolbar } from "./Toolbar";
 import type { Tool } from "./types";
 import type { SceneData } from "../core/types";
+import type { WidgetKind } from "../core/types";
 import { normalizeSceneAttachments } from "../core/scene";
 import { createRootScene, exportSceneJson, exportSceneObj } from "../core/document";
+import { WidgetPalette } from "./WidgetPalette";
 
 interface HistoryState {
   past: SceneData[];
@@ -16,15 +18,18 @@ const historyLimit = 100;
 
 export function App() {
   const [activeTool, setActiveTool] = useState<Tool>("select");
+  const [selectedWidgetKind, setSelectedWidgetKind] = useState<WidgetKind>("antenna");
   const [history, setHistory] = useState<HistoryState>(() => ({
     past: [],
     present: createRootScene(),
     future: [],
   }));
   const [fileName, setFileName] = useState("strutz.json");
+  const [filePath, setFilePath] = useState<string | null>(null);
   const openInputRef = useRef<HTMLInputElement>(null);
 
   const sceneData = history.present;
+  const electron = window.strutzElectron;
 
   const setSceneData = useCallback((update: React.SetStateAction<SceneData>) => {
     setHistory((current) => {
@@ -78,29 +83,109 @@ export function App() {
     });
   }, []);
 
-  const save = useCallback(() => {
-    downloadText(fileName, exportSceneJson(sceneData), "application/json");
-  }, [fileName, sceneData]);
+  const newScene = useCallback(() => {
+    replaceSceneData(createRootScene());
+    setFileName("strutz.json");
+    setFilePath(null);
+  }, [replaceSceneData]);
 
-  const saveAs = useCallback(() => {
+  const save = useCallback(async () => {
+    const text = exportSceneJson(sceneData);
+    if (electron) {
+      try {
+        const result = await electron.saveScene({ filePath, fileName, text });
+        if (!result.canceled) {
+          setFilePath(result.filePath ?? null);
+          setFileName(result.fileName ?? fileName);
+        }
+      } catch (error) {
+        window.alert(error instanceof Error ? error.message : "Could not save scene file.");
+      }
+      return;
+    }
+
+    downloadText(fileName, exportSceneJson(sceneData), "application/json");
+  }, [electron, fileName, filePath, sceneData]);
+
+  const saveAs = useCallback(async () => {
+    const text = exportSceneJson(sceneData);
+    if (electron) {
+      try {
+        const result = await electron.saveScene({ filePath: null, fileName, text });
+        if (!result.canceled) {
+          setFilePath(result.filePath ?? null);
+          setFileName(result.fileName ?? fileName);
+        }
+      } catch (error) {
+        window.alert(error instanceof Error ? error.message : "Could not save scene file.");
+      }
+      return;
+    }
+
     const nextName = window.prompt("Save as", fileName) ?? fileName;
     if (!nextName.trim()) return;
     const normalizedName = nextName.endsWith(".json") ? nextName : `${nextName}.json`;
     setFileName(normalizedName);
     downloadText(normalizedName, exportSceneJson(sceneData), "application/json");
-  }, [fileName, sceneData]);
+  }, [electron, fileName, sceneData]);
 
-  const open = useCallback(() => {
+  const loadSceneText = useCallback((text: string, nextFileName: string, nextFilePath: string | null) => {
+    try {
+      const parsed = JSON.parse(text) as SceneData;
+      assertSceneData(parsed);
+      replaceSceneData(parsed);
+      setFileName(nextFileName.endsWith(".json") ? nextFileName : `${nextFileName}.json`);
+      setFilePath(nextFilePath);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Could not open scene file.");
+    }
+  }, [replaceSceneData]);
+
+  const open = useCallback(async () => {
+    if (electron) {
+      try {
+        const result = await electron.openScene();
+        if (!result.canceled && result.text && result.fileName) {
+          loadSceneText(result.text, result.fileName, result.filePath ?? null);
+        }
+      } catch (error) {
+        window.alert(error instanceof Error ? error.message : "Could not open scene file.");
+      }
+      return;
+    }
+
     openInputRef.current?.click();
-  }, []);
+  }, [electron, loadSceneText]);
 
-  const exportJson = useCallback(() => {
-    downloadText(fileName.replace(/\.json$/i, ".json"), exportSceneJson(sceneData), "application/json");
-  }, [fileName, sceneData]);
+  const exportJson = useCallback(async () => {
+    const exportName = fileName.replace(/\.json$/i, ".json");
+    const text = exportSceneJson(sceneData);
+    if (electron) {
+      try {
+        await electron.exportScene({ fileName: exportName, text, type: "json" });
+      } catch (error) {
+        window.alert(error instanceof Error ? error.message : "Could not export JSON.");
+      }
+      return;
+    }
 
-  const exportObj = useCallback(() => {
-    downloadText(fileName.replace(/\.json$/i, ".obj"), exportSceneObj(sceneData), "model/obj");
-  }, [fileName, sceneData]);
+    downloadText(exportName, text, "application/json");
+  }, [electron, fileName, sceneData]);
+
+  const exportObj = useCallback(async () => {
+    const exportName = fileName.replace(/\.json$/i, ".obj");
+    const text = exportSceneObj(sceneData);
+    if (electron) {
+      try {
+        await electron.exportScene({ fileName: exportName, text, type: "obj" });
+      } catch (error) {
+        window.alert(error instanceof Error ? error.message : "Could not export OBJ.");
+      }
+      return;
+    }
+
+    downloadText(exportName, text, "model/obj");
+  }, [electron, fileName, sceneData]);
 
   const handleOpenFile = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -109,17 +194,43 @@ export function App() {
 
     const reader = new FileReader();
     reader.onload = () => {
-      try {
-        const parsed = JSON.parse(String(reader.result)) as SceneData;
-        assertSceneData(parsed);
-        replaceSceneData(parsed);
-        setFileName(file.name.endsWith(".json") ? file.name : `${file.name}.json`);
-      } catch (error) {
-        window.alert(error instanceof Error ? error.message : "Could not open scene file.");
-      }
+      loadSceneText(String(reader.result), file.name, null);
     };
     reader.readAsText(file);
-  }, [replaceSceneData]);
+  }, [loadSceneText]);
+
+  useEffect(() => {
+    if (!electron) return;
+
+    return electron.onMenuCommand((command) => {
+      switch (command) {
+        case "new":
+          newScene();
+          break;
+        case "open":
+          void open();
+          break;
+        case "save":
+          void save();
+          break;
+        case "save-as":
+          void saveAs();
+          break;
+        case "export-json":
+          void exportJson();
+          break;
+        case "export-obj":
+          void exportObj();
+          break;
+        case "undo":
+          undo();
+          break;
+        case "redo":
+          redo();
+          break;
+      }
+    });
+  }, [electron, exportJson, exportObj, newScene, open, redo, save, saveAs, undo]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -138,13 +249,24 @@ export function App() {
 
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
-        save();
+        if (event.shiftKey) void saveAs();
+        else void save();
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "o") {
+        event.preventDefault();
+        void open();
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "n") {
+        event.preventDefault();
+        newScene();
       }
     };
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [redo, save, undo]);
+  }, [newScene, open, redo, save, saveAs, undo]);
 
   return (
     <div style={{ display: "flex", width: "100%", height: "100%" }}>
@@ -158,17 +280,18 @@ export function App() {
       <Toolbar
         activeTool={activeTool}
         onSelectTool={setActiveTool}
-        canUndo={history.past.length > 0}
-        canRedo={history.future.length > 0}
-        onUndo={undo}
-        onRedo={redo}
-        onSave={save}
-        onSaveAs={saveAs}
-        onOpen={open}
-        onExportJson={exportJson}
-        onExportObj={exportObj}
       />
-      <Viewport activeTool={activeTool} sceneData={sceneData} setSceneData={setSceneData} />
+      <WidgetPalette
+        active={activeTool === "place-widget"}
+        selected={selectedWidgetKind}
+        onSelect={setSelectedWidgetKind}
+      />
+      <Viewport
+        activeTool={activeTool}
+        selectedWidgetKind={selectedWidgetKind}
+        sceneData={sceneData}
+        setSceneData={setSceneData}
+      />
     </div>
   );
 }
@@ -191,7 +314,7 @@ function assertSceneData(value: SceneData) {
     typeof value !== "object" ||
     !value.nodes ||
     !value.struts ||
-    !value.accessories
+    !value.widgets && !value.accessories
   ) {
     throw new Error("The selected file is not a Strutz scene.");
   }

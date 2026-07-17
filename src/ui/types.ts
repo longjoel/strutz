@@ -1,1 +1,1 @@
-export type Tool = "select" | "draw-strut" | "place-accessory";
+export type Tool = "select" | "draw-strut" | "place-widget";

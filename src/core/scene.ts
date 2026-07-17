@@ -2,13 +2,25 @@ import type {
   SceneData,
   NodeData,
   StrutData,
-  AccessoryData,
+  PanelData,
+  WidgetData,
+  WidgetKind,
   Vec3,
   FaceName,
   StrutKind,
   Attachments,
 } from "./types";
-import { nodeSize, oppositeFace, VALID_STRUT_LENGTHS } from "./constants";
+import { nodeSize, oppositeFace } from "./constants";
+import {
+  faceNormal,
+  getAttachmentPosition,
+  getCoplanarPlane,
+  getStrutRoutePoints,
+  isAxisAlignedVector,
+  isValidCorner45Footprint,
+  isValidStrutLength,
+  sub,
+} from "./rules";
 export const SNAP_GRID = 1;
 
 export function createNode(position: Vec3): NodeData {
@@ -31,6 +43,19 @@ function createEmptyAttachments(): Attachments {
 }
 
 export function normalizeSceneAttachments(scene: SceneData): SceneData {
+  const { accessories: legacyAccessories, ...currentScene } = scene;
+  const widgets = { ...(scene.widgets ?? {}) };
+  for (const accessory of Object.values(legacyAccessories ?? {})) {
+    const kind = legacyWidgetKind(accessory.definitionId);
+    if (!kind || widgets[accessory.id]) continue;
+    widgets[accessory.id] = {
+      id: accessory.id,
+      kind,
+      nodeId: accessory.nodeId,
+      face: accessory.face,
+      rotation: accessory.rotation,
+    };
+  }
   const nodes: Record<string, NodeData> = {};
 
   for (const [id, node] of Object.entries(scene.nodes)) {
@@ -40,16 +65,17 @@ export function normalizeSceneAttachments(scene: SceneData): SceneData {
     };
   }
 
-  for (const acc of Object.values(scene.accessories)) {
-    const node = nodes[acc.nodeId];
+  for (const widget of Object.values(widgets)) {
+    const node = nodes[widget.nodeId];
     if (!node) continue;
+    if (node.attachments[widget.face].occupied) continue;
 
     node.attachments = {
       ...node.attachments,
-      [acc.face]: {
+      [widget.face]: {
         occupied: true,
-        occupantId: acc.id,
-        occupantType: "accessory",
+        occupantId: widget.id,
+        occupantType: "widget",
       },
     };
   }
@@ -82,8 +108,10 @@ export function normalizeSceneAttachments(scene: SceneData): SceneData {
   }
 
   return {
-    ...scene,
+    ...currentScene,
     nodes,
+    panels: scene.panels ?? {},
+    widgets,
   };
 }
 
@@ -123,24 +151,29 @@ export function removeNodeFromScene(scene: SceneData, nodeId: string): SceneData
   delete newNodes[nodeId];
 
   const newStruts = { ...scene.struts };
-  const newAccessories = { ...scene.accessories };
+  const newPanels = { ...(scene.panels ?? {}) };
+  const newWidgets = { ...(scene.widgets ?? {}) };
 
   for (const [id, strut] of Object.entries(newStruts)) {
     if (strut.nodeA === nodeId || strut.nodeB === nodeId) {
       delete newStruts[id];
+      for (const [panelId, panel] of Object.entries(newPanels)) {
+        if (panel.strutIds.includes(id)) delete newPanels[panelId];
+      }
     }
   }
 
-  for (const [id, acc] of Object.entries(newAccessories)) {
-    if (acc.nodeId === nodeId) {
-      delete newAccessories[id];
+  for (const [id, widget] of Object.entries(newWidgets)) {
+    if (widget.nodeId === nodeId) {
+      delete newWidgets[id];
     }
   }
 
   return normalizeSceneAttachments({
     nodes: newNodes,
     struts: newStruts,
-    accessories: newAccessories,
+    panels: newPanels,
+    widgets: newWidgets,
   });
 }
 
@@ -171,13 +204,10 @@ export function canConnectStrut(
   const posA = getAttachmentWorldPosition(scene, nodeA, faceA);
   const posB = getAttachmentWorldPosition(scene, nodeB, faceB);
 
-  const dx = posB.x - posA.x;
-  const dy = posB.y - posA.y;
-  const dz = posB.z - posA.z;
-  const manhattan = Math.abs(dx) + Math.abs(dy) + Math.abs(dz);
-  const euclidean = Math.sqrt(dx * dx + dy * dy + dz * dz);
-  if (Math.abs(manhattan - euclidean) > 0.01) return false;
-  if (!VALID_STRUT_LENGTHS.some((len) => Math.abs(euclidean - len) < 0.01)) return false;
+  const delta = sub(posB, posA);
+  const distance = Math.sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
+  if (!isAxisAlignedVector(delta)) return false;
+  if (!isValidStrutLength(distance)) return false;
 
   return true;
 }
@@ -195,49 +225,11 @@ export function canConnectCorner45Strut(
   const nB = scene.nodes[nodeB];
   if (!nA || !nB) return false;
 
-  const normalA = faceNormalVec(faceA);
-  const normalB = faceNormalVec(faceB);
-  const dot = normalA.x * normalB.x + normalA.y * normalB.y + normalA.z * normalB.z;
-  if (dot !== 0) return false;
-
   const occA = nA.attachments[faceA]?.occupied;
   const occB = nB.attachments[faceB]?.occupied;
   if (occA || occB) return false;
 
-  const delta = {
-    x: nB.position.x - nA.position.x,
-    y: nB.position.y - nA.position.y,
-    z: nB.position.z - nA.position.z,
-  };
-  const abs = {
-    x: Math.abs(delta.x),
-    y: Math.abs(delta.y),
-    z: Math.abs(delta.z),
-  };
-  const movingAxes = (["x", "y", "z"] as const).filter((axis) => abs[axis] > 0.01);
-  if (movingAxes.length !== 2) return false;
-
-  const axisA = faceAxis(faceA);
-  const axisB = faceAxis(faceB);
-  if (axisA === axisB) return false;
-  if (!movingAxes.includes(axisA) || !movingAxes.includes(axisB)) return false;
-
-  if (Math.sign(delta[axisA]) !== Math.sign(normalA[axisA])) return false;
-  if (Math.sign(delta[axisB]) !== -Math.sign(normalB[axisB])) return false;
-
-  const rawFootprintA = abs[axisA];
-  const rawFootprintB = abs[axisB];
-  const faceFootprintA = abs[axisA] - nodeSize;
-  const faceFootprintB = abs[axisB] - nodeSize;
-  const rawValid =
-    Math.abs(rawFootprintA - rawFootprintB) < 0.01 &&
-    VALID_STRUT_LENGTHS.some((len) => Math.abs(rawFootprintA - len) < 0.01);
-  const faceValid =
-    Math.abs(faceFootprintA - faceFootprintB) < 0.01 &&
-    VALID_STRUT_LENGTHS.some((len) => Math.abs(faceFootprintA - len) < 0.01);
-  if (!rawValid && !faceValid) return false;
-
-  return true;
+  return isValidCorner45Footprint(sub(nB.position, nA.position), faceA, faceB);
 }
 
 export function addStrutToScene(scene: SceneData, strut: StrutData): SceneData {
@@ -253,42 +245,237 @@ export function removeStrutFromScene(scene: SceneData, strutId: string): SceneDa
 
   const newStruts = { ...scene.struts };
   delete newStruts[strutId];
+  const newPanels = { ...(scene.panels ?? {}) };
+  for (const [panelId, panel] of Object.entries(newPanels)) {
+    if (panel.strutIds.includes(strutId)) delete newPanels[panelId];
+  }
 
   return normalizeSceneAttachments({
     ...scene,
     struts: newStruts,
+    panels: newPanels,
   });
 }
 
-export function addAccessoryToScene(scene: SceneData, acc: AccessoryData): SceneData {
-  const node = scene.nodes[acc.nodeId];
+export function canCreatePanel(scene: SceneData, strutIds: string[]): boolean {
+  return getPanelPoints(scene, strutIds) !== null;
+}
+
+export function createPanelFromStruts(scene: SceneData, strutIds: string[]): PanelData | null {
+  const points = getPanelPoints(scene, strutIds);
+  if (!points) return null;
+
+  const sortedStrutIds = [...new Set(strutIds)].sort();
+  const existingSides = new Set(Object.values(scene.panels ?? {}).flatMap((panel) => {
+    const panelStruts = [...panel.strutIds].sort();
+    const sameLoop = panelStruts.length === sortedStrutIds.length &&
+      panelStruts.every((id, index) => id === sortedStrutIds[index]);
+    return sameLoop ? [panel.side ?? "top"] : [];
+  }));
+  const side = existingSides.has("top") ? (existingSides.has("bottom") ? null : "bottom") : "top";
+  if (!side) return null;
+
+  return {
+    id: crypto.randomUUID(),
+    strutIds: sortedStrutIds,
+    side,
+  };
+}
+
+export function addPanelToScene(scene: SceneData, panel: PanelData): SceneData {
+  if (!canCreatePanel(scene, panel.strutIds)) return scene;
+  const panelSide = panel.side ?? "top";
+  const panelStruts = [...new Set(panel.strutIds)].sort();
+  const sideOccupied = Object.values(scene.panels ?? {}).some((existingPanel) => {
+    const existingStruts = [...new Set(existingPanel.strutIds)].sort();
+    return (existingPanel.side ?? "top") === panelSide &&
+      existingStruts.length === panelStruts.length &&
+      existingStruts.every((id, index) => id === panelStruts[index]);
+  });
+  if (sideOccupied) return scene;
+
+  return normalizeSceneAttachments({
+    ...scene,
+    panels: { ...(scene.panels ?? {}), [panel.id]: panel },
+  });
+}
+
+export function removePanelFromScene(scene: SceneData, panelId: string): SceneData {
+  if (!scene.panels?.[panelId]) return scene;
+
+  const panels = { ...scene.panels };
+  delete panels[panelId];
+
+  return normalizeSceneAttachments({ ...scene, panels });
+}
+
+export function flipPanelInScene(scene: SceneData, panelId: string): SceneData {
+  const panel = scene.panels?.[panelId];
+  if (!panel) return scene;
+
+  const nextSide = panel.side === "bottom" ? "top" : "bottom";
+  const panelStruts = [...new Set(panel.strutIds)].sort();
+  const targetOccupied = Object.values(scene.panels).some((existingPanel) => {
+    if (existingPanel.id === panelId || (existingPanel.side ?? "top") !== nextSide) return false;
+    const existingStruts = [...new Set(existingPanel.strutIds)].sort();
+    return existingStruts.length === panelStruts.length &&
+      existingStruts.every((id, index) => id === panelStruts[index]);
+  });
+  if (targetOccupied) return scene;
+
+  return normalizeSceneAttachments({
+    ...scene,
+    panels: {
+      ...scene.panels,
+      [panelId]: { ...panel, side: nextSide },
+    },
+  });
+}
+
+export function getPanelPoints(scene: SceneData, strutIds: string[]): Vec3[] | null {
+  const loop = getPanelLoop(scene, strutIds);
+  if (!loop || !getCoplanarPlane(loop.nodePoints)) return null;
+
+  return loop.nodePoints;
+}
+
+export function getPanelBoundaryPoints(scene: SceneData, strutIds: string[]): Vec3[] | null {
+  const loop = getPanelLoop(scene, strutIds);
+  if (!loop) return null;
+
+  const points = loop.traversedStruts.flatMap(({ strut, fromNodeId }) => {
+    const nodeA = scene.nodes[strut.nodeA];
+    const nodeB = scene.nodes[strut.nodeB];
+    if (!nodeA || !nodeB) return [];
+
+    const route = getStrutRoutePoints({
+      nodeA: nodeA.position,
+      faceA: strut.faceA,
+      nodeB: nodeB.position,
+      faceB: strut.faceB,
+      kind: strut.kind,
+    });
+    return strut.nodeA === fromNodeId ? route : [...route].reverse();
+  });
+
+  return points.length >= 3 && getCoplanarPlane(points) ? points : null;
+}
+
+function getPanelLoop(
+  scene: SceneData,
+  strutIds: string[],
+): { nodePoints: Vec3[]; traversedStruts: Array<{ strut: StrutData; fromNodeId: string }> } | null {
+  const uniqueStrutIds = [...new Set(strutIds)];
+  if (uniqueStrutIds.length < 3) return null;
+
+  const struts: StrutData[] = [];
+  const connectedStruts = new Map<string, string[]>();
+
+  for (const strutId of uniqueStrutIds) {
+    const strut = scene.struts[strutId];
+    if (!strut) return null;
+
+    const nodeA = scene.nodes[strut.nodeA];
+    const nodeB = scene.nodes[strut.nodeB];
+    if (!nodeA || !nodeB || strut.nodeA === strut.nodeB) return null;
+
+    struts.push(strut);
+    connectedStruts.set(strut.nodeA, [...(connectedStruts.get(strut.nodeA) ?? []), strut.id]);
+    connectedStruts.set(strut.nodeB, [...(connectedStruts.get(strut.nodeB) ?? []), strut.id]);
+  }
+
+  // A panel is bounded by tubes, so its selected struts must make one closed loop.
+  if ([...connectedStruts.values()].some((strutIdsAtNode) => strutIdsAtNode.length !== 2)) {
+    return null;
+  }
+
+  const strutsById = new Map(struts.map((strut) => [strut.id, strut]));
+  const startNodeId = struts[0].nodeA;
+  const nodePoints: Vec3[] = [];
+  const traversedStruts: Array<{ strut: StrutData; fromNodeId: string }> = [];
+  const visitedStrutIds = new Set<string>();
+  let currentNodeId = startNodeId;
+  let previousStrutId: string | null = null;
+
+  while (true) {
+    const node = scene.nodes[currentNodeId];
+    if (!node) return null;
+    nodePoints.push(node.position);
+
+    const candidates = connectedStruts.get(currentNodeId);
+    const nextStrutId = candidates?.find((id) => id !== previousStrutId);
+    if (!nextStrutId || visitedStrutIds.has(nextStrutId)) break;
+
+    const nextStrut = strutsById.get(nextStrutId);
+    if (!nextStrut) return null;
+    visitedStrutIds.add(nextStrutId);
+    traversedStruts.push({ strut: nextStrut, fromNodeId: currentNodeId });
+    previousStrutId = nextStrutId;
+    currentNodeId = nextStrut.nodeA === currentNodeId ? nextStrut.nodeB : nextStrut.nodeA;
+    if (currentNodeId === startNodeId) break;
+  }
+
+  if (currentNodeId !== startNodeId || visitedStrutIds.size !== struts.length || nodePoints.length < 3) {
+    return null;
+  }
+  if (!getCoplanarPlane(nodePoints)) return null;
+
+  return { nodePoints, traversedStruts };
+}
+
+export function addWidgetToScene(scene: SceneData, widget: WidgetData): SceneData {
+  const node = scene.nodes[widget.nodeId];
   if (!node) return scene;
 
-  const existing = node.attachments[acc.face];
+  const existing = node.attachments[widget.face];
   if (existing?.occupied) return scene;
 
   return normalizeSceneAttachments({
     ...scene,
-    accessories: { ...scene.accessories, [acc.id]: acc },
+    widgets: { ...(scene.widgets ?? {}), [widget.id]: widget },
   });
 }
 
-export function removeAccessoryFromScene(
+export function removeWidgetFromScene(
   scene: SceneData,
-  accesssoryId: string,
+  widgetId: string,
 ): SceneData {
-  const acc = scene.accessories[accesssoryId];
-  if (!acc) return scene;
+  const widget = scene.widgets?.[widgetId];
+  if (!widget) return scene;
 
-  const node = scene.nodes[acc.nodeId];
+  const node = scene.nodes[widget.nodeId];
   if (node) {
-    const newAccessories = { ...scene.accessories };
-    delete newAccessories[accesssoryId];
+    const widgets = { ...scene.widgets };
+    delete widgets[widgetId];
 
-    return normalizeSceneAttachments({ ...scene, accessories: newAccessories });
+    return normalizeSceneAttachments({ ...scene, widgets });
   }
 
   return scene;
+}
+
+export function rotateWidgetInScene(scene: SceneData, widgetId: string): SceneData {
+  const widget = scene.widgets?.[widgetId];
+  if (!widget) return scene;
+
+  return normalizeSceneAttachments({
+    ...scene,
+    widgets: {
+      ...scene.widgets,
+      [widgetId]: { ...widget, rotation: (widget.rotation + 1) % 4 },
+    },
+  });
+}
+
+function legacyWidgetKind(definitionId: string): WidgetKind | null {
+  switch (definitionId) {
+    case "antenna":
+    case "rocket-engine":
+    case "cockpit":
+      return definitionId;
+    default:
+      return null;
+  }
 }
 
 export function getAttachmentWorldPosition(
@@ -299,47 +486,9 @@ export function getAttachmentWorldPosition(
   const node = scene.nodes[nodeId];
   if (!node) return { x: 0, y: 0, z: 0 };
 
-  const n = faceNormalVec(face);
-  const half = nodeSize / 2;
-
-  return {
-    x: node.position.x + n.x * half,
-    y: node.position.y + n.y * half,
-    z: node.position.z + n.z * half,
-  };
-}
-
-function faceNormalVec(face: FaceName): Vec3 {
-  switch (face) {
-    case "top":
-      return { x: 0, y: 1, z: 0 };
-    case "bottom":
-      return { x: 0, y: -1, z: 0 };
-    case "front":
-      return { x: 0, y: 0, z: 1 };
-    case "back":
-      return { x: 0, y: 0, z: -1 };
-    case "right":
-      return { x: 1, y: 0, z: 0 };
-    case "left":
-      return { x: -1, y: 0, z: 0 };
-  }
-}
-
-function faceAxis(face: FaceName): keyof Vec3 {
-  switch (face) {
-    case "left":
-    case "right":
-      return "x";
-    case "top":
-    case "bottom":
-      return "y";
-    case "front":
-    case "back":
-      return "z";
-  }
+  return getAttachmentPosition(node.position, face);
 }
 
 export function nodeFaceToWorldNormal(face: string): Vec3 {
-  return faceNormalVec(face as FaceName);
+  return faceNormal(face as FaceName);
 }

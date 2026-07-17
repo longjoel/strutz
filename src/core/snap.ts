@@ -1,5 +1,12 @@
-import type { Vec3 } from "./types";
-import { VALID_STRUT_LENGTHS, nodeSize } from "./constants";
+import type { FaceName, Vec3 } from "./types";
+import { VALID_STRUT_LENGTHS } from "./constants";
+import {
+  faceNormal as ruleFaceNormal,
+  getAttachmentPosition,
+  isValidStrutLength as isValidRuleStrutLength,
+  length,
+  sub,
+} from "./rules";
 
 export function snapToGrid(point: Vec3, gridSize: number): Vec3 {
   return {
@@ -12,34 +19,15 @@ export function snapToGrid(point: Vec3, gridSize: number): Vec3 {
 export const SNAP_GRID = 1;
 
 export function distance(a: Vec3, b: Vec3): number {
-  const dx = a.x - b.x;
-  const dy = a.y - b.y;
-  const dz = a.z - b.z;
-  return Math.sqrt(dx * dx + dy * dy + dz * dz);
+  return length(sub(a, b));
 }
 
 export function isValidStrutLength(d: number): boolean {
-  const epsilon = 0.01;
-  return VALID_STRUT_LENGTHS.some((len) => Math.abs(d - len) < epsilon);
+  return isValidRuleStrutLength(d);
 }
 
 export function faceNormal(face: string): Vec3 {
-  switch (face) {
-    case "top":
-      return { x: 0, y: 1, z: 0 };
-    case "bottom":
-      return { x: 0, y: -1, z: 0 };
-    case "front":
-      return { x: 0, y: 0, z: 1 };
-    case "back":
-      return { x: 0, y: 0, z: -1 };
-    case "right":
-      return { x: 1, y: 0, z: 0 };
-    case "left":
-      return { x: -1, y: 0, z: 0 };
-    default:
-      return { x: 0, y: 0, z: 0 };
-  }
+  return isFaceName(face) ? ruleFaceNormal(face) : { x: 0, y: 0, z: 0 };
 }
 
 export function vec3toTuple(v: Vec3): [number, number, number] {
@@ -50,13 +38,7 @@ export function getAttachmentWorldPosition(
   nodePosition: Vec3,
   face: string,
 ): Vec3 {
-  const n = faceNormal(face);
-  const half = nodeSize / 2;
-  return {
-    x: nodePosition.x + n.x * half,
-    y: nodePosition.y + n.y * half,
-    z: nodePosition.z + n.z * half,
-  };
+  return isFaceName(face) ? getAttachmentPosition(nodePosition, face) : nodePosition;
 }
 
 export function findNearestSnapPositions(
@@ -83,4 +65,13 @@ export function findNearestSnapPositions(
   }
 
   return candidates;
+}
+
+function isFaceName(value: string): value is FaceName {
+  return value === "top" ||
+    value === "bottom" ||
+    value === "front" ||
+    value === "back" ||
+    value === "left" ||
+    value === "right";
 }
