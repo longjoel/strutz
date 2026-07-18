@@ -87,6 +87,10 @@ function buildMenu() {
           label: "Export OBJ...",
           click: () => sendMenuCommand("export-obj"),
         },
+        {
+          label: "Export glTF...",
+          click: () => sendMenuCommand("export-gltf"),
+        },
         { type: "separator" },
         isMac ? { role: "close" } : { role: "quit" },
       ],
@@ -182,10 +186,12 @@ ipcMain.handle("file:save-scene", async (_event, payload) => {
 ipcMain.handle("file:export-scene", async (_event, payload) => {
   const filters = payload.type === "obj"
     ? [{ name: "Wavefront OBJ", extensions: ["obj"] }]
-    : [{ name: "JSON", extensions: ["json"] }];
+    : payload.type === "gltf"
+      ? [{ name: "glTF", extensions: ["gltf"] }]
+      : [{ name: "JSON", extensions: ["json"] }];
 
   const result = await dialog.showSaveDialog(mainWindow, {
-    title: payload.type === "obj" ? "Export OBJ" : "Export JSON",
+    title: payload.type === "obj" ? "Export OBJ" : payload.type === "gltf" ? "Export glTF" : "Export JSON",
     defaultPath: payload.fileName,
     filters,
   });

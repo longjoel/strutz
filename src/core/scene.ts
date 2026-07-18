@@ -12,13 +12,19 @@ import type {
 } from "./types";
 import { nodeSize, oppositeFace } from "./constants";
 import {
+  add,
+  cross,
+  dot,
   faceNormal,
   getAttachmentPosition,
-  getCoplanarPlane,
   getStrutRoutePoints,
+  RULE_EPSILON,
   isAxisAlignedVector,
   isValidCorner45Footprint,
   isValidStrutLength,
+  length,
+  normalize,
+  scale,
   sub,
 } from "./rules";
 export const SNAP_GRID = 1;
@@ -334,7 +340,7 @@ export function flipPanelInScene(scene: SceneData, panelId: string): SceneData {
 
 export function getPanelPoints(scene: SceneData, strutIds: string[]): Vec3[] | null {
   const loop = getPanelLoop(scene, strutIds);
-  if (!loop || !getCoplanarPlane(loop.nodePoints)) return null;
+  if (!loop) return null;
 
   return loop.nodePoints;
 }
@@ -343,22 +349,66 @@ export function getPanelBoundaryPoints(scene: SceneData, strutIds: string[]): Ve
   const loop = getPanelLoop(scene, strutIds);
   if (!loop) return null;
 
-  const points = loop.traversedStruts.flatMap(({ strut, fromNodeId }) => {
-    const nodeA = scene.nodes[strut.nodeA];
-    const nodeB = scene.nodes[strut.nodeB];
-    if (!nodeA || !nodeB) return [];
+  const points = loop.traversedStruts.flatMap((traversedStrut) => getTraversedStrutRoute(scene, traversedStrut));
 
-    const route = getStrutRoutePoints({
-      nodeA: nodeA.position,
-      faceA: strut.faceA,
-      nodeB: nodeB.position,
-      faceB: strut.faceB,
-      kind: strut.kind,
-    });
-    return strut.nodeA === fromNodeId ? route : [...route].reverse();
-  });
+  return points.length >= 3 ? points : null;
+}
 
-  return points.length >= 3 && getCoplanarPlane(points) ? points : null;
+export interface HullStripGeometry {
+  points: Vec3[];
+  indices: number[];
+}
+
+export function getPanelHullStrip(
+  scene: SceneData,
+  strutIds: string[],
+  side: "top" | "bottom" = "top",
+): HullStripGeometry | null {
+  const loop = getPanelLoop(scene, strutIds);
+  if (!loop) return null;
+
+  const cornerRibs = loop.traversedStruts.filter(({ strut }) => strut.kind === "corner45");
+  if (cornerRibs.length !== 2 || loop.traversedStruts.length !== 4) return null;
+
+  const firstRib = getTraversedStrutRoute(scene, cornerRibs[0]);
+  const secondRib = [...getTraversedStrutRoute(scene, cornerRibs[1])].reverse();
+  if (firstRib.length !== secondRib.length || firstRib.length < 2) return null;
+
+  const segmentNormals: Vec3[] = [];
+  for (let index = 0; index < firstRib.length - 1; index += 1) {
+    const along = sub(firstRib[index + 1], firstRib[index]);
+    const across = sub(secondRib[index], firstRib[index]);
+    let normal = normalize(cross(along, across));
+    if (length(normal) < RULE_EPSILON) return null;
+    const previous = segmentNormals[index - 1];
+    if (previous && dot(normal, previous) < 0) normal = scale(normal, -1);
+    segmentNormals.push(normal);
+  }
+
+  const offset = side === "bottom" ? -nodeSize / 2 : nodeSize / 2;
+  const points: Vec3[] = [];
+  for (let index = 0; index < firstRib.length; index += 1) {
+    const previous = segmentNormals[Math.max(0, index - 1)];
+    const next = segmentNormals[Math.min(segmentNormals.length - 1, index)];
+    const normal = normalize(add(previous, next));
+    const shift = scale(normal, offset);
+    points.push(add(firstRib[index], shift), add(secondRib[index], shift));
+  }
+
+  const indices: number[] = [];
+  for (let index = 0; index < firstRib.length - 1; index += 1) {
+    const a = index * 2;
+    const b = a + 1;
+    const nextA = a + 2;
+    const nextB = a + 3;
+    if (side === "bottom") {
+      indices.push(a, b, nextB, a, nextB, nextA);
+    } else {
+      indices.push(a, nextB, b, a, nextA, nextB);
+    }
+  }
+
+  return { points, indices };
 }
 
 function getPanelLoop(
@@ -418,9 +468,25 @@ function getPanelLoop(
   if (currentNodeId !== startNodeId || visitedStrutIds.size !== struts.length || nodePoints.length < 3) {
     return null;
   }
-  if (!getCoplanarPlane(nodePoints)) return null;
-
   return { nodePoints, traversedStruts };
+}
+
+function getTraversedStrutRoute(
+  scene: SceneData,
+  { strut, fromNodeId }: { strut: StrutData; fromNodeId: string },
+): Vec3[] {
+  const nodeA = scene.nodes[strut.nodeA];
+  const nodeB = scene.nodes[strut.nodeB];
+  if (!nodeA || !nodeB) return [];
+
+  const route = getStrutRoutePoints({
+    nodeA: nodeA.position,
+    faceA: strut.faceA,
+    nodeB: nodeB.position,
+    faceB: strut.faceB,
+    kind: strut.kind,
+  });
+  return strut.nodeA === fromNodeId ? route : [...route].reverse();
 }
 
 export function addWidgetToScene(scene: SceneData, widget: WidgetData): SceneData {

@@ -1,5 +1,5 @@
 import { nodeSize, strutWidth } from "./constants";
-import { createNode, getPanelBoundaryPoints } from "./scene";
+import { createNode, getPanelBoundaryPoints, getPanelHullStrip } from "./scene";
 import {
   cross,
   dot,
@@ -7,13 +7,16 @@ import {
   getAttachmentPosition,
   getCorner45PlaneNormal,
   getCoplanarPlane,
+  getPolygonNormal,
   getStrutRoutePoints,
   insetCoplanarPolygon,
+  insetHullPolygon,
   length,
   normalize,
   offsetPlanePoints,
   scale,
   sub,
+  triangulatePolygon,
 } from "./rules";
 import type { FaceName, SceneData, Vec3, WidgetData } from "./types";
 
@@ -63,20 +66,38 @@ export function exportSceneObj(scene: SceneData): string {
   }
 
   for (const panel of Object.values(scene.panels ?? {})) {
+    const hullStrip = getPanelHullStrip(scene, panel.strutIds, panel.side ?? "top");
+    if (hullStrip) {
+      builder.object(`panel_${panel.id}`);
+      builder.addTriangleMesh(hullStrip.points, hullStrip.indices);
+      continue;
+    }
+
     const points = getPanelBoundaryPoints(scene, panel.strutIds);
     if (!points) continue;
     const plane = getCoplanarPlane(points);
-    if (!plane) continue;
-
-    const panelPoints = offsetPlanePoints(
-      insetCoplanarPolygon(points, plane.normal, strutWidth / 2),
-      plane.normal,
-      panel.side === "bottom" ? -strutWidth / 2 : strutWidth / 2,
-    );
-    if (panelPoints.length < 3) continue;
 
     builder.object(`panel_${panel.id}`);
-    builder.addPanelFace(panelPoints);
+    const hullNormal = plane ? null : getPolygonNormal(points);
+    if (plane || hullNormal) {
+      const panelNormal = plane?.normal ?? hullNormal!;
+      const panelPoints = offsetPlanePoints(
+        plane
+          ? insetCoplanarPolygon(points, panelNormal, strutWidth / 2)
+          : insetHullPolygon(points, panelNormal, strutWidth / 2),
+        panelNormal,
+        panel.side === "bottom" ? -strutWidth / 2 : strutWidth / 2,
+      );
+      if (panelPoints.length < 3) continue;
+      const indices = triangulatePolygon(panelPoints, panelNormal);
+      if (!indices) continue;
+      builder.addTriangleMesh(
+        panelPoints,
+        panel.side === "bottom" ? reverseTriangleWinding(indices) : indices,
+      );
+    } else {
+      builder.addHullFace(points, panel.side === "bottom");
+    }
   }
 
   for (const widget of Object.values(scene.widgets ?? {})) {
@@ -88,6 +109,14 @@ export function exportSceneObj(scene: SceneData): string {
   }
 
   return builder.toString();
+}
+
+function reverseTriangleWinding(indices: number[]): number[] {
+  const reversed: number[] = [];
+  for (let index = 0; index < indices.length; index += 3) {
+    reversed.push(indices[index], indices[index + 2], indices[index + 1]);
+  }
+  return reversed;
 }
 
 class ObjBuilder {
@@ -164,6 +193,37 @@ class ObjBuilder {
     }
 
     this.lines.push(`f ${vertices.map((_, index) => start + index).join(" ")}`);
+    this.vertexOffset += vertices.length;
+  }
+
+  addHullFace(boundary: Vec3[], reverse = false) {
+    if (boundary.length < 3) return;
+    const center = scale(
+      boundary.reduce((sum, point) => add(sum, point), { x: 0, y: 0, z: 0 }),
+      1 / boundary.length,
+    );
+    const start = this.vertexOffset;
+    this.lines.push(`v ${formatNumber(center.x)} ${formatNumber(center.y)} ${formatNumber(center.z)}`);
+    for (const point of boundary) {
+      this.lines.push(`v ${formatNumber(point.x)} ${formatNumber(point.y)} ${formatNumber(point.z)}`);
+    }
+    for (let index = 0; index < boundary.length; index += 1) {
+      const current = start + 1 + index;
+      const next = start + 1 + ((index + 1) % boundary.length);
+      this.lines.push(reverse ? `f ${start} ${next} ${current}` : `f ${start} ${current} ${next}`);
+    }
+    this.vertexOffset += boundary.length + 1;
+  }
+
+  addTriangleMesh(vertices: Vec3[], indices: number[]) {
+    if (vertices.length < 3 || indices.length < 3) return;
+    const start = this.vertexOffset;
+    for (const vertex of vertices) {
+      this.lines.push(`v ${formatNumber(vertex.x)} ${formatNumber(vertex.y)} ${formatNumber(vertex.z)}`);
+    }
+    for (let index = 0; index < indices.length; index += 3) {
+      this.lines.push(`f ${start + indices[index]} ${start + indices[index + 1]} ${start + indices[index + 2]}`);
+    }
     this.vertexOffset += vertices.length;
   }
 

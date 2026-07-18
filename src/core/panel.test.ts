@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createPanelFromStruts, flipPanelInScene, getPanelPoints } from "./scene";
+import { createPanelFromStruts, flipPanelInScene, getPanelHullStrip, getPanelPoints } from "./scene";
 import type { Attachments, NodeData, SceneData, StrutData } from "./types";
 
 describe("panel rules", () => {
@@ -18,11 +18,13 @@ describe("panel rules", () => {
     });
   });
 
-  it("rejects panels when selected strut endpoint nodes are not coplanar", () => {
+  it("creates a hull panel when selected strut endpoint nodes are not coplanar", () => {
     const scene = createPanelScene({ d: { x: 0, y: 3, z: 1 } });
 
-    expect(getPanelPoints(scene, ["ab", "bc", "cd", "da"])).toBeNull();
-    expect(createPanelFromStruts(scene, ["ab", "bc", "cd", "da"])).toBeNull();
+    expect(getPanelPoints(scene, ["ab", "bc", "cd", "da"])).not.toBeNull();
+    expect(createPanelFromStruts(scene, ["ab", "bc", "cd", "da"])).toMatchObject({
+      strutIds: ["ab", "bc", "cd", "da"],
+    });
   });
 
   it("rejects open strut chains instead of spanning their missing boundary", () => {
@@ -59,6 +61,14 @@ describe("panel rules", () => {
       { ...withTopPanel, panels: { ...withTopPanel.panels, [bottomPanel!.id]: bottomPanel! } },
       ["ab", "bc", "cd", "da"],
     )).toBeNull();
+  });
+
+  it("skins paired 45-degree ribs as three adjacent hull rectangles", () => {
+    const scene = createRibbedHullScene();
+    const hull = getPanelHullStrip(scene, ["rail-a", "rib-b", "rail-c", "rib-d"]);
+
+    expect(hull?.points).toHaveLength(8);
+    expect(hull?.indices).toHaveLength(18);
   });
 });
 
@@ -107,4 +117,21 @@ function emptyAttachments(): Attachments {
     left: { occupied: false },
     right: { occupied: false },
   };
+}
+
+function createRibbedHullScene(): SceneData {
+  const nodes: Record<string, NodeData> = {
+    a: node("a", { x: 0, y: 0, z: 0 }),
+    b: node("b", { x: 4, y: 0, z: 0 }),
+    c: node("c", { x: 7, y: 3, z: 0 }),
+    d: node("d", { x: 3, y: 3, z: 0 }),
+  };
+  const struts: Record<string, StrutData> = {
+    "rail-a": { ...strut("rail-a", "a", "b"), faceA: "right", faceB: "left" },
+    "rib-b": { ...strut("rib-b", "b", "c"), kind: "corner45", faceA: "right", faceB: "bottom" },
+    "rail-c": { ...strut("rail-c", "c", "d"), faceA: "left", faceB: "right" },
+    "rib-d": { ...strut("rib-d", "d", "a"), kind: "corner45", faceA: "left", faceB: "top" },
+  };
+
+  return { nodes, struts, panels: {}, widgets: {} };
 }

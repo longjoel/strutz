@@ -5,6 +5,7 @@ type StrutzMenuCommand =
   | "save-as"
   | "export-json"
   | "export-obj"
+  | "export-gltf"
   | "undo"
   | "redo";
 
@@ -37,7 +38,7 @@ interface StrutzElectronApi {
   exportScene(payload: {
     fileName: string;
     text: string;
-    type: "json" | "obj";
+    type: "json" | "obj" | "gltf";
   }): Promise<ExportSceneResult>;
 }
 

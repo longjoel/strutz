@@ -182,6 +182,77 @@ export function insetCoplanarPolygon(points: Vec3[], normal: Vec3, distance: num
   });
 }
 
+export function getPolygonNormal(points: Vec3[]): Vec3 | null {
+  if (points.length < 3) return null;
+  const areaNormal = points.reduce((sum, point, index) => {
+    const next = points[(index + 1) % points.length];
+    return add(sum, cross(point, next));
+  }, { x: 0, y: 0, z: 0 });
+  const normal = normalize(areaNormal);
+  return length(normal) < 0.0001 ? null : normal;
+}
+
+export function insetHullPolygon(points: Vec3[], normal: Vec3, distance: number): Vec3[] {
+  if (points.length < 3 || distance === 0) return points;
+
+  const orientedPoints = orientPolygonToNormal(points, normal);
+  return orientedPoints.map((point, index) => {
+    const previous = orientedPoints[(index - 1 + orientedPoints.length) % orientedPoints.length];
+    const next = orientedPoints[(index + 1) % orientedPoints.length];
+    const incoming = normalize(sub(point, previous));
+    const outgoing = normalize(sub(next, point));
+    const incomingInset = normalize(cross(normal, incoming));
+    const outgoingInset = normalize(cross(normal, outgoing));
+    const insetDirection = normalize(add(incomingInset, outgoingInset));
+
+    // Keep corners beveled so separated tube joints remain visible rather than being bridged.
+    return add(point, scale(insetDirection, distance));
+  });
+}
+
+export function triangulatePolygon(points: Vec3[], normal: Vec3): number[] | null {
+  if (points.length < 3) return null;
+  const basisU = getPolygonBasisU(points);
+  if (!basisU) return null;
+  const basisV = normalize(cross(normal, basisU));
+  if (length(basisV) < 0.0001) return null;
+
+  const projected = points.map((point) => ({ x: dot(point, basisU), y: dot(point, basisV) }));
+  const area = polygonArea(projected);
+  if (Math.abs(area) < RULE_EPSILON) return null;
+
+  const remaining = points.map((_, index) => index);
+  const triangles: number[] = [];
+  const winding = area > 0 ? 1 : -1;
+  let safety = points.length * points.length;
+
+  while (remaining.length > 3 && safety > 0) {
+    let clipped = false;
+    for (let index = 0; index < remaining.length; index += 1) {
+      const previous = remaining[(index - 1 + remaining.length) % remaining.length];
+      const current = remaining[index];
+      const next = remaining[(index + 1) % remaining.length];
+      if (winding * triangleArea(projected[previous], projected[current], projected[next]) <= RULE_EPSILON) {
+        continue;
+      }
+      if (remaining.some((candidate) => candidate !== previous && candidate !== current && candidate !== next &&
+        pointInTriangle(projected[candidate], projected[previous], projected[current], projected[next]))) {
+        continue;
+      }
+
+      triangles.push(previous, current, next);
+      remaining.splice(index, 1);
+      clipped = true;
+      break;
+    }
+    if (!clipped) return null;
+    safety -= 1;
+  }
+
+  if (remaining.length === 3) triangles.push(remaining[0], remaining[1], remaining[2]);
+  return triangles;
+}
+
 export function offsetPlanePoints(points: Vec3[], normal: Vec3, distance: number): Vec3[] {
   const offset = scale(normalize(normal), distance);
   return points.map((point) => add(point, offset));
@@ -254,6 +325,43 @@ function intersectCoplanarLines(
 
   const t = dot(cross(sub(pointB, pointA), directionB), normal) / denominator;
   return add(pointA, scale(directionA, t));
+}
+
+function getPolygonBasisU(points: Vec3[]): Vec3 | null {
+  for (let index = 1; index < points.length; index += 1) {
+    const basis = normalize(sub(points[index], points[0]));
+    if (length(basis) >= 0.0001) return basis;
+  }
+  return null;
+}
+
+function polygonArea(points: Array<{ x: number; y: number }>): number {
+  return points.reduce((sum, point, index) => {
+    const next = points[(index + 1) % points.length];
+    return sum + point.x * next.y - next.x * point.y;
+  }, 0) / 2;
+}
+
+function triangleArea(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  c: { x: number; y: number },
+): number {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+function pointInTriangle(
+  point: { x: number; y: number },
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  c: { x: number; y: number },
+): boolean {
+  const areaA = triangleArea(point, a, b);
+  const areaB = triangleArea(point, b, c);
+  const areaC = triangleArea(point, c, a);
+  const hasNegative = areaA < -RULE_EPSILON || areaB < -RULE_EPSILON || areaC < -RULE_EPSILON;
+  const hasPositive = areaA > RULE_EPSILON || areaB > RULE_EPSILON || areaC > RULE_EPSILON;
+  return !(hasNegative && hasPositive);
 }
 
 function uniqueVec3(points: Vec3[]): Vec3[] {

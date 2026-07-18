@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Viewport } from "./Viewport";
 import { Toolbar } from "./Toolbar";
-import type { Tool } from "./types";
+import type { StrutDrawMode, Tool } from "./types";
 import type { SceneData } from "../core/types";
 import type { WidgetKind } from "../core/types";
 import { normalizeSceneAttachments } from "../core/scene";
 import { createRootScene, exportSceneJson, exportSceneObj } from "../core/document";
 import { WidgetPalette } from "./WidgetPalette";
+import { AppBar } from "./AppBar";
+import { exportSceneGltf } from "./exportGltf";
+import { StrutPalette } from "./StrutPalette";
 
 interface HistoryState {
   past: SceneData[];
@@ -19,6 +22,7 @@ const historyLimit = 100;
 export function App() {
   const [activeTool, setActiveTool] = useState<Tool>("select");
   const [selectedWidgetKind, setSelectedWidgetKind] = useState<WidgetKind>("antenna");
+  const [strutDrawMode, setStrutDrawMode] = useState<StrutDrawMode>("straight");
   const [history, setHistory] = useState<HistoryState>(() => ({
     past: [],
     present: createRootScene(),
@@ -187,6 +191,20 @@ export function App() {
     downloadText(exportName, text, "model/obj");
   }, [electron, fileName, sceneData]);
 
+  const exportGltf = useCallback(async () => {
+    const exportName = fileName.replace(/\.json$/i, ".gltf");
+    try {
+      const text = await exportSceneGltf(sceneData);
+      if (electron) {
+        await electron.exportScene({ fileName: exportName, text, type: "gltf" });
+      } else {
+        downloadText(exportName, text, "model/gltf+json");
+      }
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Could not export glTF.");
+    }
+  }, [electron, fileName, sceneData]);
+
   const handleOpenFile = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -222,6 +240,9 @@ export function App() {
         case "export-obj":
           void exportObj();
           break;
+        case "export-gltf":
+          void exportGltf();
+          break;
         case "undo":
           undo();
           break;
@@ -230,7 +251,7 @@ export function App() {
           break;
       }
     });
-  }, [electron, exportJson, exportObj, newScene, open, redo, save, saveAs, undo]);
+  }, [electron, exportGltf, exportJson, exportObj, newScene, open, redo, save, saveAs, undo]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -269,7 +290,7 @@ export function App() {
   }, [newScene, open, redo, save, saveAs, undo]);
 
   return (
-    <div style={{ display: "flex", width: "100%", height: "100%" }}>
+    <div style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%" }}>
       <input
         ref={openInputRef}
         type="file"
@@ -277,21 +298,50 @@ export function App() {
         style={{ display: "none" }}
         onChange={handleOpenFile}
       />
-      <Toolbar
-        activeTool={activeTool}
-        onSelectTool={setActiveTool}
+      <AppBar
+        fileName={fileName}
+        scene={sceneData}
+        canUndo={history.past.length > 0}
+        canRedo={history.future.length > 0}
+        onUndo={undo}
+        onRedo={redo}
       />
-      <WidgetPalette
-        active={activeTool === "place-widget"}
-        selected={selectedWidgetKind}
-        onSelect={setSelectedWidgetKind}
-      />
-      <Viewport
-        activeTool={activeTool}
-        selectedWidgetKind={selectedWidgetKind}
-        sceneData={sceneData}
-        setSceneData={setSceneData}
-      />
+      <div style={{ display: "flex", flex: 1, minHeight: 0, position: "relative" }}>
+        <Viewport
+          activeTool={activeTool}
+          selectedWidgetKind={selectedWidgetKind}
+          strutDrawMode={strutDrawMode}
+          sceneData={sceneData}
+          setSceneData={setSceneData}
+        />
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 2,
+            pointerEvents: "none",
+          }}
+        >
+          <div style={{ position: "absolute", top: 12, left: 12, pointerEvents: "auto" }}>
+            <Toolbar
+              activeTool={activeTool}
+              onSelectTool={setActiveTool}
+            />
+          </div>
+          <div style={{ position: "absolute", top: 12, left: 72, pointerEvents: "auto" }}>
+            <WidgetPalette
+              active={activeTool === "place-widget"}
+              selected={selectedWidgetKind}
+              onSelect={setSelectedWidgetKind}
+            />
+            <StrutPalette
+              active={activeTool === "draw-strut"}
+              mode={strutDrawMode}
+              onChange={setStrutDrawMode}
+            />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -30,12 +30,14 @@ export function Toolbar({
     <div
       style={{
         width: 52,
-        background: "#16213e",
+        background: "#111b31",
         display: "flex",
         flexDirection: "column",
-        padding: "8px 0",
+        padding: 6,
         gap: 4,
-        borderRight: "1px solid #0f3460",
+        border: "1px solid #254368",
+        borderRadius: 6,
+        boxShadow: "0 8px 24px rgba(2, 12, 26, 0.35)",
       }}
     >
       {TOOLS.map((tool) => (
@@ -47,10 +49,10 @@ export function Toolbar({
             width: 40,
             height: 40,
             margin: "0 auto",
-            border: tool.id === activeTool ? "2px solid #e94560" : "2px solid transparent",
+            border: tool.id === activeTool ? "1px solid #4ecca3" : "1px solid transparent",
             borderRadius: 6,
-            background: tool.id === activeTool ? "#0f3460" : "transparent",
-            color: "#e0e0e0",
+            background: tool.id === activeTool ? "#243d5a" : "transparent",
+            color: tool.id === activeTool ? "#d7e7f0" : "#86a0ba",
             cursor: "pointer",
             fontSize: 18,
             display: "flex",

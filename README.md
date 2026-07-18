@@ -5,6 +5,7 @@ Strutz is an experimental 3D construction editor for building node-and-strut ass
 ## Features
 
 - Place cubic nodes connected by straight struts.
+- Extend a multi-node selection with matching straight struts in one operation.
 - Use valid strut lengths of `1`, `3`, and `7`.
 - Connect perpendicular faces with 45-degree corner struts when a valid target node exists.
 - Subdivide straight struts by inserting nodes.
@@ -12,7 +13,7 @@ Strutz is an experimental 3D construction editor for building node-and-strut ass
 - Right-click nodes or struts to delete them.
 - Undo/redo scene edits.
 - Save/open scenes as JSON.
-- Export scenes as JSON or OBJ.
+- Export scenes as JSON, OBJ, or glTF.
 - Orbit the camera with left-drag, middle-drag, or the viewport gizmo.
 
 ## Getting Started
@@ -50,7 +51,7 @@ npm run typecheck
 - `Ctrl+Z`: Undo
 - `Ctrl+Shift+Z`/`Ctrl+Y`: Redo
 - `Ctrl+S`: Save JSON
-- `P`: Snap a panel into the next available face of a selected closed loop of coplanar struts
+- `P`: Snap a panel into the next available face of a selected closed strut loop
 - `F`: Flip selected panels between their top and bottom faces
 - `R`: Rotate selected widgets by 90 degrees around their attachment face
 - `Delete`/`Backspace`: Delete selected nodes, struts, panels, or widgets
@@ -62,12 +63,13 @@ npm run typecheck
 - Nodes are unit cubes centered on the grid.
 - Each node face can hold one attachment: a strut or a widget.
 - Straight struts connect opposite faces along one axis only.
+- Starting a straight strut from one of several selected nodes previews and places the same length from every selected node as one undoable operation.
 - Straight strut clear spans must be `1`, `3`, or `7` grid units.
 - 45-degree corner struts connect perpendicular faces across exactly two axes.
 - 45-degree corner footprints must be square, and each side must resolve to a valid strut length.
 - Strut geometry routes from face center to face center; 45-degree struts use short face stubs and a flat, aligned middle segment.
-- Panels are constrained by one closed loop of selected struts and can only be created when its endpoint nodes are coplanar.
-- Panels render inside the loop, meeting the inner edges of the constraining struts, then offset to their outer face.
+- Panels are constrained by one closed loop of selected struts. Flat loops create inset planar panels; non-planar loops create faceted hull skins.
+- Panels render inside the loop, meeting the inner edges of flat constraining struts or spanning non-planar tube routes as a hull skin.
 - Each closed strut loop accepts one panel on each side, allowing an enclosed box to be built from four struts and four nodes.
 - Widgets snap to a free node face. Antennas, rocket engines, and cockpits point outward and can rotate in quarter turns.
 
