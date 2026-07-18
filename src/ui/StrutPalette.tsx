@@ -25,8 +25,8 @@ export function StrutPalette({
         gap: 6,
       }}
     >
-      <ModeButton active={mode === "straight"} label="Straight" icon="|" onClick={() => onChange("straight")} />
-      <ModeButton active={mode === "corner45"} label="45° Corner" icon="⌜" onClick={() => onChange("corner45")} />
+      <ModeButton active={mode === "straight"} label="Structural" icon="|" onClick={() => onChange("straight")} />
+      <ModeButton active={mode === "corner"} label="External" icon="⌜" onClick={() => onChange("corner")} />
     </aside>
   );
 }

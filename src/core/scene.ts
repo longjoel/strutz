@@ -10,7 +10,7 @@ import type {
   StrutKind,
   Attachments,
 } from "./types";
-import { nodeSize, oppositeFace } from "./constants";
+import { CURRENT_SCENE_VERSION, nodeSize } from "./constants";
 import {
   add,
   cross,
@@ -18,16 +18,19 @@ import {
   faceNormal,
   getAttachmentPosition,
   getStrutRoutePoints,
+  isCornerStrutKind,
   RULE_EPSILON,
-  isAxisAlignedVector,
-  isValidCorner45Footprint,
-  isValidStrutLength,
   length,
   normalize,
   scale,
   sub,
 } from "./rules";
-export const SNAP_GRID = 1;
+import {
+  validateSceneNodePlacement,
+  validateStrutPlacement,
+  validateWidgetPlacement,
+  type PlacementResult,
+} from "./placement";
 
 export function createNode(position: Vec3): NodeData {
   return {
@@ -115,6 +118,7 @@ export function normalizeSceneAttachments(scene: SceneData): SceneData {
 
   return {
     ...currentScene,
+    schemaVersion: scene.schemaVersion ?? CURRENT_SCENE_VERSION,
     nodes,
     panels: scene.panels ?? {},
     widgets,
@@ -129,27 +133,8 @@ export function addNodeToScene(scene: SceneData, node: NodeData): SceneData {
 }
 
 export function hasNodeContact(scene: SceneData): boolean {
-  const nodes = Object.values(scene.nodes);
-
-  for (let i = 0; i < nodes.length; i += 1) {
-    for (let j = i + 1; j < nodes.length; j += 1) {
-      const a = nodes[i];
-      const b = nodes[j];
-      const dx = Math.abs(a.position.x - b.position.x);
-      const dy = Math.abs(a.position.y - b.position.y);
-      const dz = Math.abs(a.position.z - b.position.z);
-
-      if (
-        dx < nodeSize + 0.01 &&
-        dy < nodeSize + 0.01 &&
-        dz < nodeSize + 0.01
-      ) {
-        return true;
-      }
-    }
-  }
-
-  return false;
+  const result = validateSceneNodePlacement(scene);
+  return !result.valid && result.reason === "node-contact";
 }
 
 export function removeNodeFromScene(scene: SceneData, nodeId: string): SceneData {
@@ -191,31 +176,7 @@ export function canConnectStrut(
   faceB: FaceName,
   kind: StrutKind = "straight",
 ): boolean {
-  if (kind === "corner45") {
-    return canConnectCorner45Strut(scene, nodeA, faceA, nodeB, faceB);
-  }
-
-  if (nodeA === nodeB) return false;
-
-  const nA = scene.nodes[nodeA];
-  const nB = scene.nodes[nodeB];
-  if (!nA || !nB) return false;
-
-  if (oppositeFace(faceA) !== faceB) return false;
-
-  const occA = nA.attachments[faceA]?.occupied;
-  const occB = nB.attachments[faceB]?.occupied;
-  if (occA || occB) return false;
-
-  const posA = getAttachmentWorldPosition(scene, nodeA, faceA);
-  const posB = getAttachmentWorldPosition(scene, nodeB, faceB);
-
-  const delta = sub(posB, posA);
-  const distance = Math.sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
-  if (!isAxisAlignedVector(delta)) return false;
-  if (!isValidStrutLength(distance)) return false;
-
-  return true;
+  return validateStrutPlacement(scene, { nodeA, faceA, nodeB, faceB, kind }).valid;
 }
 
 export function canConnectCorner45Strut(
@@ -225,17 +186,13 @@ export function canConnectCorner45Strut(
   nodeB: string,
   faceB: FaceName,
 ): boolean {
-  if (nodeA === nodeB) return false;
-
-  const nA = scene.nodes[nodeA];
-  const nB = scene.nodes[nodeB];
-  if (!nA || !nB) return false;
-
-  const occA = nA.attachments[faceA]?.occupied;
-  const occB = nB.attachments[faceB]?.occupied;
-  if (occA || occB) return false;
-
-  return isValidCorner45Footprint(sub(nB.position, nA.position), faceA, faceB);
+  return validateStrutPlacement(scene, {
+    nodeA,
+    faceA,
+    nodeB,
+    faceB,
+    kind: "corner45",
+  }).valid;
 }
 
 export function addStrutToScene(scene: SceneData, strut: StrutData): SceneData {
@@ -264,7 +221,28 @@ export function removeStrutFromScene(scene: SceneData, strutId: string): SceneDa
 }
 
 export function canCreatePanel(scene: SceneData, strutIds: string[]): boolean {
-  return getPanelPoints(scene, strutIds) !== null;
+  return validatePanelPlacement(scene, strutIds).valid;
+}
+
+export type PanelPlacementIssue = "invalid-loop" | "side-occupied";
+
+/** Validate the closed-loop constraint and optional side occupancy for a panel. */
+export function validatePanelPlacement(
+  scene: SceneData,
+  strutIds: string[],
+  side?: "top" | "bottom",
+): PlacementResult<PanelPlacementIssue> {
+  if (!getPanelLoop(scene, strutIds)) return { valid: false, reason: "invalid-loop" };
+
+  const targetIds = [...new Set(strutIds)].sort();
+  const occupiedSides = new Set(Object.values(scene.panels ?? {}).flatMap((panel) => {
+    const existingIds = [...new Set(panel.strutIds)].sort();
+    const sameLoop = existingIds.length === targetIds.length &&
+      existingIds.every((id, index) => id === targetIds[index]);
+    return sameLoop ? [panel.side ?? "top"] : [];
+  }));
+  const occupied = side ? occupiedSides.has(side) : occupiedSides.size >= 2;
+  return occupied ? { valid: false, reason: "side-occupied" } : { valid: true };
 }
 
 export function createPanelFromStruts(scene: SceneData, strutIds: string[]): PanelData | null {
@@ -367,7 +345,7 @@ export function getPanelHullStrip(
   const loop = getPanelLoop(scene, strutIds);
   if (!loop) return null;
 
-  const cornerRibs = loop.traversedStruts.filter(({ strut }) => strut.kind === "corner45");
+  const cornerRibs = loop.traversedStruts.filter(({ strut }) => isCornerStrutKind(strut.kind));
   if (cornerRibs.length !== 2 || loop.traversedStruts.length !== 4) return null;
 
   const firstRib = getTraversedStrutRoute(scene, cornerRibs[0]);
@@ -490,11 +468,7 @@ function getTraversedStrutRoute(
 }
 
 export function addWidgetToScene(scene: SceneData, widget: WidgetData): SceneData {
-  const node = scene.nodes[widget.nodeId];
-  if (!node) return scene;
-
-  const existing = node.attachments[widget.face];
-  if (existing?.occupied) return scene;
+  if (!validateWidgetPlacement(scene, widget).valid) return scene;
 
   return normalizeSceneAttachments({
     ...scene,

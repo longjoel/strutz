@@ -71,7 +71,11 @@ export function corner45LengthFromAxisDelta(axisDelta: number): number {
   return faceMatch ?? rawLength;
 }
 
-export function isValidCorner45Footprint(delta: Vec3, faceA: FaceName, faceB: FaceName): boolean {
+export function isCornerStrutKind(kind?: StrutKind): boolean {
+  return kind === "corner" || kind === "corner45";
+}
+
+export function isValidPlanarCornerFootprint(delta: Vec3, faceA: FaceName, faceB: FaceName): boolean {
   const normalA = faceNormal(faceA);
   const normalB = faceNormal(faceB);
   if (!approximatelyEqual(dot(normalA, normalB), 0)) return false;
@@ -81,12 +85,21 @@ export function isValidCorner45Footprint(delta: Vec3, faceA: FaceName, faceB: Fa
 
   const axisA = faceAxis(faceA);
   const axisB = faceAxis(faceB);
-  if (axisA === axisB) return false;
-  if (!movingAxes.includes(axisA) || !movingAxes.includes(axisB)) return false;
-
+  if (axisA === axisB || !movingAxes.includes(axisA) || !movingAxes.includes(axisB)) return false;
   if (Math.sign(delta[axisA]) !== Math.sign(normalA[axisA])) return false;
   if (Math.sign(delta[axisB]) !== -Math.sign(normalB[axisB])) return false;
 
+  const absA = Math.abs(delta[axisA]);
+  const absB = Math.abs(delta[axisB]);
+  return bothValidFootprints(absA, absB) ||
+    bothValidFootprints(absA - nodeSize, absB - nodeSize);
+}
+
+/** Legacy square-footprint rule retained for compatibility and focused tests. */
+export function isValidCorner45Footprint(delta: Vec3, faceA: FaceName, faceB: FaceName): boolean {
+  if (!isValidPlanarCornerFootprint(delta, faceA, faceB)) return false;
+  const axisA = faceAxis(faceA);
+  const axisB = faceAxis(faceB);
   const absA = Math.abs(delta[axisA]);
   const absB = Math.abs(delta[axisB]);
   return equalValidFootprint(absA, absB) ||
@@ -97,7 +110,7 @@ export function getStrutRoutePoints(endpoints: StrutEndpoints): Vec3[] {
   const from = getAttachmentPosition(endpoints.nodeA, endpoints.faceA);
   const to = getAttachmentPosition(endpoints.nodeB, endpoints.faceB);
 
-  if (endpoints.kind !== "corner45") return [from, to];
+  if (!isCornerStrutKind(endpoints.kind)) return [from, to];
 
   const stub = nodeSize / 2;
   return [
@@ -302,6 +315,10 @@ function manhattanLength(v: Vec3): number {
 
 function equalValidFootprint(a: number, b: number): boolean {
   return approximatelyEqual(a, b) && isValidStrutLength(a);
+}
+
+function bothValidFootprints(a: number, b: number): boolean {
+  return isValidStrutLength(a) && isValidStrutLength(b);
 }
 
 function orientPolygonToNormal(points: Vec3[], normal: Vec3): Vec3[] {

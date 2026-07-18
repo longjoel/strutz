@@ -1,4 +1,5 @@
 import type { SceneData } from "../core/types";
+import type { CameraMode } from "./camera";
 
 export function AppBar({
   fileName,
@@ -7,6 +8,10 @@ export function AppBar({
   canRedo,
   onUndo,
   onRedo,
+  cameraMode,
+  followSelection,
+  onToggleCameraMode,
+  onToggleFollowSelection,
 }: {
   fileName: string;
   scene: SceneData;
@@ -14,6 +19,10 @@ export function AppBar({
   canRedo: boolean;
   onUndo: () => void;
   onRedo: () => void;
+  cameraMode: CameraMode;
+  followSelection: boolean;
+  onToggleCameraMode: () => void;
+  onToggleFollowSelection: () => void;
 }) {
   const stats = [
     ["Nodes", Object.keys(scene.nodes).length],
@@ -56,6 +65,19 @@ export function AppBar({
       <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
         <IconButton label="Undo" icon="↶" disabled={!canUndo} onClick={onUndo} />
         <IconButton label="Redo" icon="↷" disabled={!canRedo} onClick={onRedo} />
+        <div style={{ height: 18, width: 1, margin: "0 3px", background: "#254368" }} />
+        <ModeButton
+          label={`Projection: ${cameraMode === "perspective" ? "Perspective" : "Orthographic"} (O)`}
+          text={cameraMode === "perspective" ? "Perspective" : "Orthographic"}
+          active={cameraMode === "orthographic"}
+          onClick={onToggleCameraMode}
+        />
+        <ModeButton
+          label="Toggle automatic camera follow"
+          text="Follow"
+          active={followSelection}
+          onClick={onToggleFollowSelection}
+        />
       </div>
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
         {stats.map(([label, count]) => (
@@ -66,6 +88,40 @@ export function AppBar({
         ))}
       </div>
     </header>
+  );
+}
+
+function ModeButton({
+  label,
+  text,
+  active,
+  onClick,
+}: {
+  label: string;
+  text: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-pressed={active}
+      onClick={onClick}
+      style={{
+        height: 28,
+        padding: "0 8px",
+        border: `1px solid ${active ? "#4ecca3" : "transparent"}`,
+        borderRadius: 4,
+        background: active ? "#243d5a" : "transparent",
+        color: active ? "#d7fff4" : "#d7e7f0",
+        cursor: "pointer",
+        fontSize: 11,
+      }}
+    >
+      {text}
+    </button>
   );
 }
 

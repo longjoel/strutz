@@ -7,6 +7,7 @@ import {
   insetCoplanarPolygon,
   insetHullPolygon,
   isValidCorner45Footprint,
+  isValidPlanarCornerFootprint,
   isValidStrutLength,
   offsetPlanePoints,
   triangulatePolygon,
@@ -54,6 +55,21 @@ describe("node and strut rules", () => {
     ]);
   });
 
+  it("routes unequal planar corners through the same face stubs", () => {
+    expect(getStrutRoutePoints({
+      nodeA: { x: 0, y: 0, z: 0 },
+      faceA: "right",
+      nodeB: { x: 3, y: 7, z: 0 },
+      faceB: "bottom",
+      kind: "corner",
+    })).toEqual([
+      { x: 0.5, y: 0, z: 0 },
+      { x: 1, y: 0, z: 0 },
+      { x: 3, y: 6, z: 0 },
+      { x: 3, y: 6.5, z: 0 },
+    ]);
+  });
+
   it("requires 45-degree corner struts to move across exactly two perpendicular face axes", () => {
     expect(isValidCorner45Footprint(
       { x: 3, y: 3, z: 0 },
@@ -69,6 +85,24 @@ describe("node and strut rules", () => {
 
     expect(isValidCorner45Footprint(
       { x: 3, y: 4, z: 0 },
+      "right",
+      "bottom",
+    )).toBe(false);
+  });
+
+  it("allows planar corners with unequal catalog runs", () => {
+    expect(isValidPlanarCornerFootprint(
+      { x: 3, y: 7, z: 0 },
+      "right",
+      "bottom",
+    )).toBe(true);
+    expect(isValidPlanarCornerFootprint(
+      { x: 4, y: 8, z: 0 },
+      "right",
+      "bottom",
+    )).toBe(true);
+    expect(isValidPlanarCornerFootprint(
+      { x: 3, y: 8, z: 0 },
       "right",
       "bottom",
     )).toBe(false);

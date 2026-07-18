@@ -32,7 +32,6 @@ import {
   getAttachmentWorldPosition,
   hasNodeContact,
 } from "../core/scene";
-import { snapToGrid } from "../core/snap";
 import { nodeSize, strutWidth, VALID_STRUT_LENGTHS, oppositeFace } from "../core/constants";
 import {
   FACE_NORMALS as RULE_FACE_NORMALS,
@@ -45,9 +44,21 @@ import {
   getStrutRoutePoints as getRuleStrutRoutePoints,
   insetCoplanarPolygon,
   insetHullPolygon,
+  isCornerStrutKind,
   offsetPlanePoints,
   triangulatePolygon,
 } from "../core/rules";
+import {
+  decomposeStrutRun as decomposeRunLength,
+  getCorner45ConnectionFaces,
+  getNearestStrutLength,
+  getStraightConnectionFaces as getConnectionFacesBetweenNodes,
+  getStraightStrutTarget,
+} from "../core/placement";
+import { SCENE_COLORS } from "./sceneColors";
+import { worldUnitsPerNdc } from "./camera";
+import { GROUND_PLANE_Y } from "./viewportConfig";
+import { getNearestStructuralDrawCandidate } from "./structuralDraw";
 
 const FACE_COLORS: Record<string, string> = {
   top: "#4ecca3",
@@ -90,15 +101,7 @@ function getDrawCandidatePosition(
   fromFace: FaceName,
   length: number,
 ): THREE.Vector3 {
-  const faceNorm = FACE_NORMALS[fromFace];
-  const centerSpacing = centerSpacingForStrutLength(length);
-  const pos = new THREE.Vector3(
-    sourceNode.position.x + faceNorm[0] * centerSpacing,
-    sourceNode.position.y + faceNorm[1] * centerSpacing,
-    sourceNode.position.z + faceNorm[2] * centerSpacing,
-  );
-
-  return new THREE.Vector3(Math.round(pos.x), Math.round(pos.y), Math.round(pos.z));
+  return vec3ToThree(getStraightStrutTarget(sourceNode, fromFace, length));
 }
 
 function getNearestDrawLength(
@@ -106,88 +109,7 @@ function getNearestDrawLength(
   fromFace: FaceName,
   point: THREE.Vector3,
 ): number {
-  const snapped = snapToGrid(point, 1);
-  const candidates = VALID_STRUT_LENGTHS.map((length) => ({
-    length,
-    pos: getDrawCandidatePosition(sourceNode, fromFace, length),
-  }));
-
-  candidates.sort((a, b) => a.pos.distanceTo(snapped) - b.pos.distanceTo(snapped));
-  return candidates[0]?.length ?? VALID_STRUT_LENGTHS[0];
-}
-
-function faceFromDelta(delta: THREE.Vector3): FaceName | null {
-  const ax = Math.abs(delta.x);
-  const ay = Math.abs(delta.y);
-  const az = Math.abs(delta.z);
-
-  if (ax > 0 && ay === 0 && az === 0) return delta.x > 0 ? "right" : "left";
-  if (ay > 0 && ax === 0 && az === 0) return delta.y > 0 ? "top" : "bottom";
-  if (az > 0 && ax === 0 && ay === 0) return delta.z > 0 ? "front" : "back";
-  return null;
-}
-
-function getConnectionFacesBetweenNodes(
-  fromNode: NodeData,
-  toNode: NodeData,
-): { fromFace: FaceName; toFace: FaceName } | null {
-  const delta = new THREE.Vector3(
-    toNode.position.x - fromNode.position.x,
-    toNode.position.y - fromNode.position.y,
-    toNode.position.z - fromNode.position.z,
-  );
-  const fromFace = faceFromDelta(delta);
-  if (!fromFace) return null;
-
-  return {
-    fromFace,
-    toFace: oppositeFace(fromFace),
-  };
-}
-
-function getCorner45ConnectionFaces(
-  fromFace: FaceName,
-  fromNode: NodeData,
-  toNode: NodeData,
-): { fromFace: FaceName; toFace: FaceName } | null {
-  const delta = new THREE.Vector3(
-    toNode.position.x - fromNode.position.x,
-    toNode.position.y - fromNode.position.y,
-    toNode.position.z - fromNode.position.z,
-  );
-  const movingAxes = [
-    { axis: "x" as const, value: delta.x },
-    { axis: "y" as const, value: delta.y },
-    { axis: "z" as const, value: delta.z },
-  ].filter(({ value }) => Math.abs(value) > 0.01);
-
-  if (movingAxes.length !== 2) return null;
-
-  const sourceAxis = faceAxis(fromFace);
-  const sourceMove = movingAxes.find(({ axis }) => axis === sourceAxis);
-  if (!sourceMove) return null;
-
-  const sourceNormal = FACE_NORMALS[fromFace];
-  const sourceNormalValue = sourceAxis === "x"
-    ? sourceNormal[0]
-    : sourceAxis === "y"
-      ? sourceNormal[1]
-      : sourceNormal[2];
-  if (Math.sign(sourceMove.value) !== Math.sign(sourceNormalValue)) return null;
-
-  const destMove = movingAxes.find(({ axis }) => axis !== sourceAxis);
-  if (!destMove) return null;
-
-  let toFace: FaceName;
-  if (destMove.axis === "x") {
-    toFace = destMove.value > 0 ? "left" : "right";
-  } else if (destMove.axis === "y") {
-    toFace = destMove.value > 0 ? "bottom" : "top";
-  } else {
-    toFace = destMove.value > 0 ? "back" : "front";
-  }
-
-  return { fromFace, toFace };
+  return getNearestStrutLength(sourceNode, fromFace, point);
 }
 
 interface Corner45PreviewCandidate {
@@ -219,7 +141,7 @@ function getCorner45PreviewCandidates(
         faces.fromFace,
         node.id,
         faces.toFace,
-        "corner45",
+        "corner",
       )
     ) {
       continue;
@@ -245,48 +167,23 @@ function getCorner45PreviewCandidates(
   return candidates;
 }
 
-function decomposeRunLength(runLength: number): number[] | null {
-  if (runLength === 0) return [];
-  if (VALID_STRUT_LENGTHS.includes(runLength)) return [runLength];
-
-  const best = new Map<number, number[] | null>([[0, []]]);
-  for (let length = 1; length <= runLength; length += 1) {
-    let bestParts: number[] | null = null;
-
-    for (const strutLength of VALID_STRUT_LENGTHS) {
-      if (strutLength > length) continue;
-      if (strutLength === length) {
-        bestParts = [strutLength];
-        continue;
-      }
-
-      const remaining = length - strutLength - nodeSize;
-      if (!Number.isInteger(remaining) || remaining <= 0) continue;
-
-      const tail = best.get(remaining);
-      if (!tail) continue;
-
-      const parts = [strutLength, ...tail];
-      if (!bestParts || parts.length < bestParts.length) {
-        bestParts = parts;
-      }
-    }
-
-    best.set(length, bestParts);
-  }
-
-  return best.get(runLength) ?? null;
-}
-
 interface SceneProps {
   activeTool: Tool;
   selectedWidgetKind: WidgetKind;
   strutDrawMode: StrutDrawMode;
   sceneData: SceneData;
   setSceneData: Dispatch<SetStateAction<SceneData>>;
+  onFocusPoint: (point: { x: number; y: number; z: number }) => void;
 }
 
-export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData, setSceneData }: SceneProps) {
+export function Scene({
+  activeTool,
+  selectedWidgetKind,
+  strutDrawMode,
+  sceneData,
+  setSceneData,
+  onFocusPoint,
+}: SceneProps) {
   const [drawState, setDrawState] = useState<{
     fromNodeId: string;
     fromFace: FaceName;
@@ -332,7 +229,7 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
       const toNode = sceneDataRef.current.nodes[nodeId];
       let len = 0;
       if (fromNode && toNode) {
-        if (kind === "corner45") {
+        if (isCornerStrutKind(kind)) {
           const delta = new THREE.Vector3(
             toNode.position.x - fromNode.position.x,
             toNode.position.y - fromNode.position.y,
@@ -362,15 +259,20 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
   );
 
   const placeDrawStrutAtLength = useCallback(
-    (length: number) => {
+    (length: number, inferredFace?: FaceName) => {
       if (!drawState) return;
+      const fromFace = inferredFace ?? drawState.fromFace;
+      const primarySource = sceneDataRef.current.nodes[drawState.fromNodeId];
+      const nextFocus = primarySource
+        ? getStraightStrutTarget(primarySource, fromFace, length)
+        : null;
       setSceneData((prev) => {
-        const destinationFace = oppositeFace(drawState.fromFace);
+        const destinationFace = oppositeFace(fromFace);
         const planned = drawState.sourceNodeIds.map((sourceNodeId) => {
           const sourceNode = prev.nodes[sourceNodeId];
-          if (!sourceNode || sourceNode.attachments[drawState.fromFace]?.occupied) return null;
+          if (!sourceNode || sourceNode.attachments[fromFace]?.occupied) return null;
 
-          const position = getDrawCandidatePosition(sourceNode, drawState.fromFace, length);
+          const position = getDrawCandidatePosition(sourceNode, fromFace, length);
           const existingNode = Object.values(prev.nodes).find(
             (node) => node.position.x === position.x && node.position.y === position.y && node.position.z === position.z,
           );
@@ -385,7 +287,7 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
           const strut: StrutData = {
             id: crypto.randomUUID(),
             nodeA: entry.sourceNodeId,
-            faceA: drawState.fromFace,
+            faceA: fromFace,
             nodeB: targetNode.id,
             faceB: destinationFace,
             length,
@@ -401,22 +303,30 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
 
         return hasNodeContact(result) ? prev : result;
       });
+      if (nextFocus) onFocusPoint(nextFocus);
       setDrawState(null);
     },
-    [drawState],
+    [drawState, onFocusPoint],
   );
 
-  const updateHoverDrawLength = useCallback(
-    (point: THREE.Vector3) => {
+  const updateStructuralDrawCandidate = useCallback(
+    (pointerNdc: THREE.Vector2) => {
       if (activeTool !== "draw-strut" || strutDrawMode !== "straight" || !drawState) return;
 
       const sourceNode = sceneDataRef.current.nodes[drawState.fromNodeId];
       if (!sourceNode) return;
+      const availableFaces = FACE_ENTRIES
+        .map(([face]) => face)
+        .filter((face) => drawState.sourceNodeIds.every((nodeId) =>
+          !sceneDataRef.current.nodes[nodeId]?.attachments[face]?.occupied));
+      const candidate = getNearestStructuralDrawCandidate(sourceNode, camera, pointerNdc, availableFaces);
+      if (!candidate) return;
 
-      setHoverDrawLength(getNearestDrawLength(sourceNode, drawState.fromFace, point));
+      setDrawState((current) => current ? { ...current, fromFace: candidate.face } : current);
+      setHoverDrawLength(candidate.length);
       setHoverCornerKey(null);
     },
-    [activeTool, drawState, strutDrawMode],
+    [activeTool, camera, drawState, strutDrawMode],
   );
 
   const placeCorner45Strut = useCallback(
@@ -430,7 +340,7 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
           candidate.fromFace,
           candidate.nodeId,
           candidate.toFace,
-          "corner45",
+          "corner",
         )
       ) {
         commitStrut(
@@ -438,12 +348,13 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
           candidate.fromFace,
           candidate.nodeId,
           candidate.toFace,
-          "corner45",
+          "corner",
         );
+        onFocusPoint(candidate.position);
       }
       setDrawState(null);
     },
-    [drawState, commitStrut],
+    [drawState, commitStrut, onFocusPoint],
   );
 
   const handleGroundClick = useCallback(
@@ -459,34 +370,41 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
       if (activeTool === "draw-strut" && strutDrawMode === "straight" && drawState) {
         event.stopPropagation();
         const sourceNode = sceneDataRef.current.nodes[drawState.fromNodeId];
-        if (!sourceNode) {
-          setDrawState(null);
-          return;
-        }
-        const length = getNearestDrawLength(
+        if (!sourceNode) return setDrawState(null);
+        const availableFaces = FACE_ENTRIES
+          .map(([face]) => face)
+          .filter((face) => drawState.sourceNodeIds.every((nodeId) =>
+            !sceneDataRef.current.nodes[nodeId]?.attachments[face]?.occupied));
+        const candidate = getNearestStructuralDrawCandidate(
           sourceNode,
-          drawState.fromFace,
-          event.point.clone(),
+          camera,
+          event.pointer,
+          availableFaces,
         );
-        setHoverDrawLength(length);
-        placeDrawStrutAtLength(length);
+        if (!candidate) return;
+        setDrawState((current) => current ? { ...current, fromFace: candidate.face } : current);
+        setHoverDrawLength(candidate.length);
+        placeDrawStrutAtLength(candidate.length, candidate.face);
         return;
       }
 
       setDrawState(null);
     },
-    [activeTool, drawState, placeDrawStrutAtLength, strutDrawMode],
+    [activeTool, camera, drawState, placeDrawStrutAtLength, strutDrawMode],
   );
 
   const handleGroundPointerMove = useCallback(
     (event: ThreeEvent<PointerEvent>) => {
-      updateHoverDrawLength(event.point.clone());
+      updateStructuralDrawCandidate(event.pointer);
     },
-    [updateHoverDrawLength],
+    [updateStructuralDrawCandidate],
   );
 
   const handleNodeClick = useCallback(
     (nodeId: string, face: FaceName | null, event: ThreeEvent<MouseEvent>) => {
+      const clickedNode = sceneDataRef.current.nodes[nodeId];
+      if (activeTool !== "select" && clickedNode) onFocusPoint(clickedNode.position);
+
       if (activeTool === "select") {
         event.stopPropagation();
 
@@ -494,6 +412,9 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
           startFaceDragRef.current(face, event.nativeEvent as unknown as PointerEvent);
           return;
         }
+
+        const node = sceneDataRef.current.nodes[nodeId];
+        if (node) onFocusPoint(node.position);
 
         setSelectedIds((prev) => {
           const next = new Set(prev);
@@ -518,16 +439,32 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
         event.stopPropagation();
 
         if (!drawState) {
-          if (face) {
-            const sourceNodeIds = strutDrawMode === "straight" && selectedIds.has(nodeId) && selectedIds.size > 1
-              ? [...selectedIds]
-              : [nodeId];
+          const sourceNodeIds = strutDrawMode === "straight" && selectedIds.has(nodeId) && selectedIds.size > 1
+            ? [...selectedIds]
+            : [nodeId];
+          if (strutDrawMode === "straight" && clickedNode) {
+            const availableFaces = FACE_ENTRIES
+              .map(([candidateFace]) => candidateFace)
+              .filter((candidateFace) => sourceNodeIds.every((sourceNodeId) =>
+                !sceneDataRef.current.nodes[sourceNodeId]?.attachments[candidateFace]?.occupied));
+            const candidate = getNearestStructuralDrawCandidate(
+              clickedNode,
+              camera,
+              event.pointer,
+              availableFaces,
+            );
+            if (candidate) {
+              setDrawState({ fromNodeId: nodeId, fromFace: candidate.face, sourceNodeIds });
+              setHoverDrawLength(candidate.length);
+            }
+          } else if (face) {
             setDrawState({ fromNodeId: nodeId, fromFace: face, sourceNodeIds });
           }
           return;
         }
 
-        if (drawState.fromNodeId === nodeId && drawState.fromFace === face) {
+        if (drawState.fromNodeId === nodeId &&
+          (strutDrawMode === "straight" || drawState.fromFace === face)) {
           setDrawState(null);
           return;
         }
@@ -546,7 +483,7 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
         const toNode = sceneDataRef.current.nodes[nodeId];
         if (!fromNode || !toNode) return;
 
-        if (strutDrawMode === "corner45") {
+        if (strutDrawMode === "corner") {
           const matchingCornerCandidate = getCorner45PreviewCandidates(
             sceneDataRef.current,
             drawState,
@@ -557,7 +494,7 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
               matchingCornerCandidate.fromFace,
               nodeId,
               matchingCornerCandidate.toFace,
-              "corner45",
+              "corner",
             );
             setDrawState(null);
           }
@@ -565,12 +502,10 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
         }
 
         if (drawState.sourceNodeIds.length > 1) {
-          const length = getNearestDrawLength(
-            fromNode,
-            drawState.fromFace,
-            vec3ToThree(toNode.position),
-          );
-          placeDrawStrutAtLength(length);
+          const inferredFaces = getConnectionFacesBetweenNodes(fromNode, toNode);
+          if (!inferredFaces) return;
+          const length = getNearestDrawLength(fromNode, inferredFaces.fromFace, vec3ToThree(toNode.position));
+          placeDrawStrutAtLength(length, inferredFaces.fromFace);
           return;
         }
 
@@ -610,7 +545,7 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
         setSceneData((prev) => addWidgetToScene(prev, widget));
       }
     },
-    [activeTool, drawState, commitStrut, placeDrawStrutAtLength, selectedWidgetKind, strutDrawMode],
+    [activeTool, camera, drawState, commitStrut, onFocusPoint, placeDrawStrutAtLength, selectedWidgetKind, strutDrawMode],
   );
 
   const handleNodeContextMenu = useCallback(
@@ -652,6 +587,7 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
     (strutId: string, point: THREE.Vector3, event: ThreeEvent<MouseEvent>) => {
       if (activeTool === "select") {
         event.stopPropagation();
+        onFocusPoint(point);
         setSelectedStrutIds((prev) => {
           const next = new Set(prev);
           if (event.nativeEvent.shiftKey) {
@@ -675,7 +611,7 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
       event.stopPropagation();
 
       const strut = sceneDataRef.current.struts[strutId];
-      if (!strut || strut.kind === "corner45" || strut.length < 3) {
+      if (!strut || isCornerStrutKind(strut.kind) || strut.length < 3) {
         setDrawState(null);
         return;
       }
@@ -805,7 +741,7 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
 
       setDrawState(null);
     },
-    [activeTool],
+    [activeTool, onFocusPoint],
   );
 
   const handlePanelClick = useCallback(
@@ -813,6 +749,7 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
       if (activeTool !== "select") return;
 
       event.stopPropagation();
+      onFocusPoint(event.point);
       setSelectedPanelIds((prev) => {
         const next = new Set(prev);
         if (event.nativeEvent.shiftKey) {
@@ -830,7 +767,7 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
         setSelectedWidgetIds(new Set());
       }
     },
-    [activeTool],
+    [activeTool, onFocusPoint],
   );
 
   const handlePanelContextMenu = useCallback(
@@ -852,6 +789,7 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
     (widgetId: string, event: ThreeEvent<MouseEvent>) => {
       if (activeTool !== "select") return;
       event.stopPropagation();
+      onFocusPoint(event.point);
       setSelectedWidgetIds((prev) => {
         const next = new Set(prev);
         if (event.nativeEvent.shiftKey) {
@@ -869,7 +807,7 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
         setSelectedPanelIds(new Set());
       }
     },
-    [activeTool],
+    [activeTool, onFocusPoint],
   );
 
   const handleWidgetContextMenu = useCallback(
@@ -914,7 +852,7 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
         initialDist: number;
       }> = [];
       for (const strut of Object.values(current.struts)) {
-        if (strut.kind === "corner45") continue;
+        if (isCornerStrutKind(strut.kind)) continue;
 
         const aSel = selectedIds.has(strut.nodeA);
         const bSel = selectedIds.has(strut.nodeB);
@@ -1023,9 +961,11 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
       const camRight = new THREE.Vector3().crossVectors(camDir, camera.up).normalize();
       const camUp = new THREE.Vector3().crossVectors(camRight, camDir).normalize();
 
-      const perspCam = camera as THREE.PerspectiveCamera;
-      const camDist = camera.position.distanceTo(dragOrigin);
-      const scale = camDist * Math.tan((perspCam.fov * Math.PI) / 360);
+      const scale = worldUnitsPerNdc(
+        camera as THREE.PerspectiveCamera | THREE.OrthographicCamera,
+        dragOrigin,
+        rect.height,
+      );
 
       const worldDX = ndcDelta.x * scale * camRight.dot(fd.faceNormal);
       const worldDY = ndcDelta.y * scale * camUp.dot(fd.faceNormal);
@@ -1350,6 +1290,7 @@ export function Scene({ activeTool, selectedWidgetKind, strutDrawMode, sceneData
           drawFromId={drawState?.fromNodeId ?? null}
           drawFromFace={drawState?.fromFace ?? null}
           isDragging={faceDragRef.current !== null && faceDragRef.current.selectedIds.includes(node.id)}
+          faceSelectionRequired={strutDrawMode === "corner"}
           onNodeClick={handleNodeClick}
           onNodeContextMenu={handleNodeContextMenu}
           onFaceKnobClick={handleFaceKnobClick}
@@ -1507,11 +1448,11 @@ function DrawPreview({
           );
         }),
       )}
-      {strutDrawMode === "corner45" && corner45Candidates.map((candidate) => {
+      {strutDrawMode === "corner" && corner45Candidates.map((candidate) => {
         const highlighted = candidate.key === highlightedCornerKey;
         const strut: StrutData = {
           id: `preview-${candidate.key}`,
-          kind: "corner45",
+          kind: "corner",
           nodeA: drawState.fromNodeId,
           faceA: candidate.fromFace,
           nodeB: candidate.nodeId ?? `preview-node-${candidate.key}`,
@@ -1691,7 +1632,7 @@ function GroundPlane({
   return (
     <mesh
       rotation={[-Math.PI / 2, 0, 0]}
-      position={[0, -0.01, 0]}
+      position={[0, GROUND_PLANE_Y, 0]}
       onClick={onClick}
       onPointerMove={onPointerMove}
     >
@@ -1715,6 +1656,7 @@ interface NodeMeshProps {
   drawFromId: string | null;
   drawFromFace: FaceName | null;
   isDragging: boolean;
+  faceSelectionRequired: boolean;
   onNodeClick: (nodeId: string, face: FaceName | null, event: ThreeEvent<MouseEvent>) => void;
   onNodeContextMenu: (nodeId: string, event: ThreeEvent<MouseEvent>) => void;
   onFaceKnobClick: (nodeId: string, face: FaceName, event: ThreeEvent<MouseEvent>) => void;
@@ -1729,6 +1671,7 @@ function NodeMesh({
   drawFromId,
   drawFromFace,
   isDragging,
+  faceSelectionRequired,
   onNodeClick,
   onNodeContextMenu,
   onFaceKnobClick,
@@ -1805,7 +1748,7 @@ function NodeMesh({
       <mesh castShadow onClick={handleClick} onContextMenu={handleContextMenu}>
         <boxGeometry args={[nodeSize, nodeSize, nodeSize]} />
         <meshStandardMaterial
-          color={isDragging ? "#e9a040" : selected ? "#e94560" : "#334466"}
+          color={isDragging ? "#e9a040" : selected ? "#e94560" : SCENE_COLORS.node}
           flatShading={true}
           transparent
           opacity={0.9}
@@ -1827,7 +1770,7 @@ function NodeMesh({
           highlighted={isDrawSource && drawFromFace === name}
           activeTool={activeTool}
           draggable={selected && activeTool === "select"}
-          drawable={activeTool === "draw-strut"}
+          drawable={activeTool === "draw-strut" && faceSelectionRequired}
           widgetable={activeTool === "place-widget" && !isOccupied(name)}
           onFaceKnobClick={(e) => handleFaceKnobClick(name as FaceName, e)}
           onFaceDrawClick={(e) => onNodeClick(node.id, name as FaceName, e)}
@@ -1983,7 +1926,7 @@ function PanelMesh({
       onContextMenu={(event) => onContextMenu(panel.id, event)}
     >
       <meshStandardMaterial
-        color={selected ? "#e9a040" : "#88a6b8"}
+        color={selected ? "#e9a040" : SCENE_COLORS.panel}
         side={THREE.DoubleSide}
       />
     </mesh>
@@ -2020,7 +1963,7 @@ function WidgetMesh({
   const roll = new THREE.Quaternion().setFromAxisAngle(outward, widget.rotation * Math.PI / 2);
   const quaternion = roll.multiply(align);
   const position = getAttachmentWorldPosition(sceneData, widget.nodeId, widget.face);
-  const color = selected ? "#e9a040" : "#4ecca3";
+  const color = selected ? "#e9a040" : SCENE_COLORS.widget;
 
   return (
     <group
@@ -2094,7 +2037,7 @@ function StrutMesh({ strut, sceneData, selected, onClick, onContextMenu }: Strut
     faceB: strut.faceB,
     kind: strut.kind,
   }).map(vec3ToThree);
-  const flatNormal = strut.kind === "corner45"
+  const flatNormal = isCornerStrutKind(strut.kind)
     ? vec3ToThree(getRuleCorner45PlaneNormal(strut.faceA, strut.faceB))
     : undefined;
 
@@ -2107,18 +2050,22 @@ function StrutMesh({ strut, sceneData, selected, onClick, onContextMenu }: Strut
           to={routePoints[index + 1]}
           halfWidth={halfWidth}
           flatNormal={flatNormal}
-          color={selected ? "#e9a040" : strut.kind === "corner45" ? "#718f7d" : "#667799"}
+          color={selected
+            ? "#e9a040"
+            : isCornerStrutKind(strut.kind)
+              ? SCENE_COLORS.planarCornerStrut
+              : SCENE_COLORS.straightStrut}
           onClick={(event) => onClick(strut.id, event.point.clone(), event)}
           onContextMenu={(event) => onContextMenu(strut.id, event)}
         />
       ))}
-      {strut.kind === "corner45" && routePoints.slice(1, -1).map((point, index) => (
+      {isCornerStrutKind(strut.kind) && routePoints.slice(1, -1).map((point, index) => (
         <CornerJointFill
           key={`fill-${index}`}
           position={point}
           halfWidth={halfWidth}
           flatNormal={flatNormal}
-          color={selected ? "#e9a040" : "#718f7d"}
+          color={selected ? "#e9a040" : SCENE_COLORS.planarCornerStrut}
         />
       ))}
       {routePoints.map((point, index) => (

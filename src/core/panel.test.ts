@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { createPanelFromStruts, flipPanelInScene, getPanelHullStrip, getPanelPoints } from "./scene";
+import {
+  createPanelFromStruts,
+  flipPanelInScene,
+  getPanelHullStrip,
+  getPanelPoints,
+  validatePanelPlacement,
+} from "./scene";
 import type { Attachments, NodeData, SceneData, StrutData } from "./types";
 
 describe("panel rules", () => {
@@ -32,6 +38,10 @@ describe("panel rules", () => {
 
     expect(getPanelPoints(scene, ["ab", "bc", "cd"])).toBeNull();
     expect(createPanelFromStruts(scene, ["ab", "bc", "cd"])).toBeNull();
+    expect(validatePanelPlacement(scene, ["ab", "bc", "cd"])).toEqual({
+      valid: false,
+      reason: "invalid-loop",
+    });
   });
 
   it("flips a panel between the top and bottom faces", () => {
@@ -57,10 +67,21 @@ describe("panel rules", () => {
 
     expect(topPanel.side).toBe("top");
     expect(bottomPanel?.side).toBe("bottom");
+    expect(validatePanelPlacement(withTopPanel, ["ab", "bc", "cd", "da"], "top")).toEqual({
+      valid: false,
+      reason: "side-occupied",
+    });
+    expect(validatePanelPlacement(withTopPanel, ["ab", "bc", "cd", "da"], "bottom")).toEqual({
+      valid: true,
+    });
     expect(createPanelFromStruts(
       { ...withTopPanel, panels: { ...withTopPanel.panels, [bottomPanel!.id]: bottomPanel! } },
       ["ab", "bc", "cd", "da"],
     )).toBeNull();
+    expect(validatePanelPlacement(
+      { ...withTopPanel, panels: { ...withTopPanel.panels, [bottomPanel!.id]: bottomPanel! } },
+      ["ab", "bc", "cd", "da"],
+    )).toEqual({ valid: false, reason: "side-occupied" });
   });
 
   it("skins paired 45-degree ribs as three adjacent hull rectangles", () => {
@@ -128,9 +149,9 @@ function createRibbedHullScene(): SceneData {
   };
   const struts: Record<string, StrutData> = {
     "rail-a": { ...strut("rail-a", "a", "b"), faceA: "right", faceB: "left" },
-    "rib-b": { ...strut("rib-b", "b", "c"), kind: "corner45", faceA: "right", faceB: "bottom" },
+    "rib-b": { ...strut("rib-b", "b", "c"), kind: "corner", faceA: "right", faceB: "bottom" },
     "rail-c": { ...strut("rail-c", "c", "d"), faceA: "left", faceB: "right" },
-    "rib-d": { ...strut("rib-d", "d", "a"), kind: "corner45", faceA: "left", faceB: "top" },
+    "rib-d": { ...strut("rib-d", "d", "a"), kind: "corner", faceA: "left", faceB: "top" },
   };
 
   return { nodes, struts, panels: {}, widgets: {} };

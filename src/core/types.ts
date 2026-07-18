@@ -5,7 +5,8 @@ export interface Vec3 {
 }
 
 export type FaceName = "top" | "bottom" | "front" | "back" | "left" | "right";
-export type StrutKind = "straight" | "corner45";
+/** `corner45` is retained for loading pre-planar-corner scene data. */
+export type StrutKind = "straight" | "corner" | "corner45";
 
 export interface AttachmentState {
   occupied: boolean;
@@ -64,6 +65,8 @@ export interface WidgetData {
 }
 
 export interface SceneData {
+  /** Missing means the pre-versioned legacy format. */
+  schemaVersion?: number;
   nodes: Record<string, NodeData>;
   struts: Record<string, StrutData>;
   panels: Record<string, PanelData>;

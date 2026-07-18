@@ -1,4 +1,4 @@
-import { nodeSize, strutWidth } from "./constants";
+import { CURRENT_SCENE_VERSION, nodeSize, strutWidth } from "./constants";
 import { createNode, getPanelBoundaryPoints, getPanelHullStrip } from "./scene";
 import {
   cross,
@@ -9,6 +9,7 @@ import {
   getCoplanarPlane,
   getPolygonNormal,
   getStrutRoutePoints,
+  isCornerStrutKind,
   insetCoplanarPolygon,
   insetHullPolygon,
   length,
@@ -22,7 +23,13 @@ import type { FaceName, SceneData, Vec3, WidgetData } from "./types";
 
 export function createRootScene(): SceneData {
   const root = createNode({ x: 0, y: 0, z: 0 });
-  return { nodes: { [root.id]: root }, struts: {}, panels: {}, widgets: {} };
+  return {
+    schemaVersion: CURRENT_SCENE_VERSION,
+    nodes: { [root.id]: root },
+    struts: {},
+    panels: {},
+    widgets: {},
+  };
 }
 
 export function exportSceneJson(scene: SceneData): string {
@@ -51,14 +58,14 @@ export function exportSceneObj(scene: SceneData): string {
       faceB: strut.faceB,
       kind: strut.kind,
     });
-    const flatNormal = strut.kind === "corner45"
+    const flatNormal = isCornerStrutKind(strut.kind)
       ? getCorner45PlaneNormal(strut.faceA, strut.faceB)
       : undefined;
     for (let i = 0; i < route.length - 1; i += 1) {
       builder.addSegmentBox(route[i], route[i + 1], strutWidth, flatNormal);
     }
 
-    if (strut.kind === "corner45") {
+    if (isCornerStrutKind(strut.kind)) {
       for (let i = 1; i < route.length - 1; i += 1) {
         builder.addAxisAlignedBox(route[i], strutWidth, strutWidth, strutWidth);
       }
@@ -144,7 +151,7 @@ class ObjBuilder {
       { x: center.x + hx, y: center.y - hy, z: center.z + hz },
       { x: center.x + hx, y: center.y + hy, z: center.z + hz },
       { x: center.x - hx, y: center.y + hy, z: center.z + hz },
-    ]);
+    ], true);
   }
 
   addSegmentBox(
@@ -186,16 +193,6 @@ class ObjBuilder {
     ]);
   }
 
-  addPanelFace(vertices: Vec3[]) {
-    const start = this.vertexOffset;
-    for (const vertex of vertices) {
-      this.lines.push(`v ${formatNumber(vertex.x)} ${formatNumber(vertex.y)} ${formatNumber(vertex.z)}`);
-    }
-
-    this.lines.push(`f ${vertices.map((_, index) => start + index).join(" ")}`);
-    this.vertexOffset += vertices.length;
-  }
-
   addHullFace(boundary: Vec3[], reverse = false) {
     if (boundary.length < 3) return;
     const center = scale(
@@ -227,18 +224,23 @@ class ObjBuilder {
     this.vertexOffset += vertices.length;
   }
 
-  private addBoxVertices(vertices: Vec3[]) {
+  private addBoxVertices(vertices: Vec3[], reverseWinding = false) {
     for (const v of vertices) {
       this.lines.push(`v ${formatNumber(v.x)} ${formatNumber(v.y)} ${formatNumber(v.z)}`);
     }
 
     const o = this.vertexOffset;
-    this.lines.push(`f ${o} ${o + 1} ${o + 2} ${o + 3}`);
-    this.lines.push(`f ${o + 4} ${o + 7} ${o + 6} ${o + 5}`);
-    this.lines.push(`f ${o} ${o + 4} ${o + 5} ${o + 1}`);
-    this.lines.push(`f ${o + 1} ${o + 5} ${o + 6} ${o + 2}`);
-    this.lines.push(`f ${o + 2} ${o + 6} ${o + 7} ${o + 3}`);
-    this.lines.push(`f ${o + 3} ${o + 7} ${o + 4} ${o}`);
+    const faces = [
+      [o, o + 1, o + 2, o + 3],
+      [o + 4, o + 7, o + 6, o + 5],
+      [o, o + 4, o + 5, o + 1],
+      [o + 1, o + 5, o + 6, o + 2],
+      [o + 2, o + 6, o + 7, o + 3],
+      [o + 3, o + 7, o + 4, o],
+    ];
+    for (const face of faces) {
+      this.lines.push(`f ${(reverseWinding ? [...face].reverse() : face).join(" ")}`);
+    }
     this.vertexOffset += vertices.length;
   }
 

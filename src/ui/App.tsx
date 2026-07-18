@@ -10,6 +10,8 @@ import { WidgetPalette } from "./WidgetPalette";
 import { AppBar } from "./AppBar";
 import { exportSceneGltf } from "./exportGltf";
 import { StrutPalette } from "./StrutPalette";
+import { CURRENT_SCENE_VERSION } from "../core/constants";
+import type { CameraMode } from "./camera";
 
 interface HistoryState {
   past: SceneData[];
@@ -23,6 +25,8 @@ export function App() {
   const [activeTool, setActiveTool] = useState<Tool>("select");
   const [selectedWidgetKind, setSelectedWidgetKind] = useState<WidgetKind>("antenna");
   const [strutDrawMode, setStrutDrawMode] = useState<StrutDrawMode>("straight");
+  const [cameraMode, setCameraMode] = useState<CameraMode>("perspective");
+  const [followSelection, setFollowSelection] = useState(true);
   const [history, setHistory] = useState<HistoryState>(() => ({
     past: [],
     present: createRootScene(),
@@ -305,6 +309,11 @@ export function App() {
         canRedo={history.future.length > 0}
         onUndo={undo}
         onRedo={redo}
+        cameraMode={cameraMode}
+        followSelection={followSelection}
+        onToggleCameraMode={() => setCameraMode((current) =>
+          current === "perspective" ? "orthographic" : "perspective")}
+        onToggleFollowSelection={() => setFollowSelection((current) => !current)}
       />
       <div style={{ display: "flex", flex: 1, minHeight: 0, position: "relative" }}>
         <Viewport
@@ -313,6 +322,9 @@ export function App() {
           strutDrawMode={strutDrawMode}
           sceneData={sceneData}
           setSceneData={setSceneData}
+          cameraMode={cameraMode}
+          followSelection={followSelection}
+          onCameraModeChange={setCameraMode}
         />
         <div
           style={{
@@ -367,5 +379,10 @@ function assertSceneData(value: SceneData) {
     !value.widgets && !value.accessories
   ) {
     throw new Error("The selected file is not a Strutz scene.");
+  }
+  if (value.schemaVersion !== undefined && value.schemaVersion > CURRENT_SCENE_VERSION) {
+    throw new Error(
+      `This scene uses format version ${value.schemaVersion}; this build supports up to version ${CURRENT_SCENE_VERSION}.`,
+    );
   }
 }
