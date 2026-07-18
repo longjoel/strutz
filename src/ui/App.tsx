@@ -9,7 +9,6 @@ import { createRootScene, exportSceneJson, exportSceneObj } from "../core/docume
 import { WidgetPalette } from "./WidgetPalette";
 import { AppBar } from "./AppBar";
 import { exportSceneGltf } from "./exportGltf";
-import { StrutPalette } from "./StrutPalette";
 import { CURRENT_SCENE_VERSION } from "../core/constants";
 import type { CameraMode } from "./camera";
 
@@ -22,7 +21,7 @@ interface HistoryState {
 const historyLimit = 100;
 
 export function App() {
-  const [activeTool, setActiveTool] = useState<Tool>("select");
+  const [activeTool, setActiveTool] = useState<Tool>("draw-strut");
   const [selectedWidgetKind, setSelectedWidgetKind] = useState<WidgetKind>("antenna");
   const [strutDrawMode, setStrutDrawMode] = useState<StrutDrawMode>("straight");
   const [cameraMode, setCameraMode] = useState<CameraMode>("perspective");
@@ -337,7 +336,9 @@ export function App() {
           <div style={{ position: "absolute", top: 12, left: 12, pointerEvents: "auto" }}>
             <Toolbar
               activeTool={activeTool}
+              strutDrawMode={strutDrawMode}
               onSelectTool={setActiveTool}
+              onSelectStrutDrawMode={setStrutDrawMode}
             />
           </div>
           <div style={{ position: "absolute", top: 12, left: 72, pointerEvents: "auto" }}>
@@ -345,11 +346,6 @@ export function App() {
               active={activeTool === "place-widget"}
               selected={selectedWidgetKind}
               onSelect={setSelectedWidgetKind}
-            />
-            <StrutPalette
-              active={activeTool === "draw-strut"}
-              mode={strutDrawMode}
-              onChange={setStrutDrawMode}
             />
           </div>
         </div>

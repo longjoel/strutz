@@ -2,16 +2,22 @@
 
 Strutz is an experimental 3D construction editor for building node-and-strut assemblies on a grid. It is built with React, Three.js, and Vite.
 
+![Strutz — Coming Soon](docs/images/strutz-coming-soon.png)
+
+## Editor Preview
+
+![The Strutz editor displaying a completed node, strut, and panel assembly](docs/images/strutz-editor.png)
+
 ## Features
 
-- Place cubic nodes connected by straight struts.
+- Nodes are created automatically as strut endpoints; there is one node type.
 - Start Structural struts by clicking a node, then use mouse direction and distance to choose the axis and catalog length.
 - Extend a multi-node selection with matching straight struts in one operation.
 - Use valid strut lengths of `1`, `3`, and `7`.
 - Use Structural struts for straight axis-aligned connections and External struts for routed connections between perpendicular faces.
 - Subdivide straight struts by inserting nodes.
-- Select and drag nodes along face directions.
-- Right-click nodes or struts to delete them.
+- Select any part with right-click and extend the selection with `Shift`+left-click.
+- Delete selected parts with `Delete` or `Backspace`; placed nodes are not repositionable.
 - Undo/redo scene edits.
 - Save/open scenes as JSON.
 - Export scenes as JSON, OBJ, or glTF.
@@ -19,6 +25,7 @@ Strutz is an experimental 3D construction editor for building node-and-strut ass
 - Re-center the camera on selected parts while preserving the current view offset.
 - Toggle automatic camera follow independently of selection.
 - Toggle between perspective and orthographic cameras.
+- Hover nodes, struts, panels, and widgets to see a contrasting geometry outline.
 
 ## Getting Started
 
@@ -48,9 +55,11 @@ npm run typecheck
 
 ## Controls
 
-- `V`: Select/move mode
-- `S`: Draw strut mode
+- `S`: Structural strut mode
+- `E`: External strut mode
 - `A`: Widget mode
+- Right-click a part: select only that part
+- `Shift`+left-click parts: toggle multi-selection
 - `Esc`: Clear selection or cancel drawing
 - `Ctrl+Z`: Undo
 - `Ctrl+Shift+Z`/`Ctrl+Y`: Redo
@@ -60,8 +69,6 @@ npm run typecheck
 - `R`: Rotate selected widgets by 90 degrees around their attachment face
 - `O`: Toggle perspective/orthographic camera
 - `Delete`/`Backspace`: Delete selected nodes, struts, panels, or widgets
-- Right-click a node: delete that node and attached struts/widgets
-- Right-click a strut: delete only that strut
 
 ## Construction Rules
 

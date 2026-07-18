@@ -2,6 +2,7 @@ import { useRef, useCallback, useState, useEffect, useMemo } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import * as THREE from "three";
 import { ThreeEvent, useThree } from "@react-three/fiber";
+import { Edges } from "@react-three/drei";
 import type { StrutDrawMode, Tool } from "./types";
 import type {
   SceneData,
@@ -56,7 +57,6 @@ import {
   getStraightStrutTarget,
 } from "../core/placement";
 import { SCENE_COLORS } from "./sceneColors";
-import { worldUnitsPerNdc } from "./camera";
 import { GROUND_PLANE_Y } from "./viewportConfig";
 import { getNearestStructuralDrawCandidate } from "./structuralDraw";
 
@@ -68,6 +68,8 @@ const FACE_COLORS: Record<string, string> = {
   right: "#9b59b6",
   left: "#1abc9c",
 };
+
+const HOVER_EDGE_COLOR = "#fff176";
 
 const FACE_NORMALS: Record<FaceName, [number, number, number]> = {
   top: [RULE_FACE_NORMALS.top.x, RULE_FACE_NORMALS.top.y, RULE_FACE_NORMALS.top.z],
@@ -195,27 +197,15 @@ export function Scene({
   const [selectedStrutIds, setSelectedStrutIds] = useState<Set<string>>(new Set());
   const [selectedPanelIds, setSelectedPanelIds] = useState<Set<string>>(new Set());
   const [selectedWidgetIds, setSelectedWidgetIds] = useState<Set<string>>(new Set());
-  const nodeRefs = useRef<Map<string, THREE.Group>>(new Map());
+  const [hoveredPart, setHoveredPart] = useState<string | null>(null);
   const sceneDataRef = useRef(sceneData);
   sceneDataRef.current = sceneData;
 
-  const faceDragRef = useRef<{
-    faceNormal: THREE.Vector3;
-    selectedIds: string[];
-    initialPositions: Map<string, THREE.Vector3>;
-    connectingStruts: Array<{
-      strutId: string;
-      selNodeId: string;
-      unselNodeId: string;
-      selFace: FaceName;
-      unselFace: FaceName;
-      initialDist: number;
-    }>;
-    pointerLastNDC: THREE.Vector2;
-    accumDelta: number;
-  } | null>(null);
+  const updateHoveredPart = useCallback((key: string, hovered: boolean) => {
+    setHoveredPart((current) => hovered ? key : current === key ? null : current);
+  }, []);
 
-  const { camera, gl } = useThree();
+  const { camera } = useThree();
 
   const commitStrut = useCallback(
     (
@@ -359,14 +349,6 @@ export function Scene({
 
   const handleGroundClick = useCallback(
     (event: ThreeEvent<MouseEvent>) => {
-      if (activeTool === "select") {
-        setSelectedIds(new Set());
-        setSelectedStrutIds(new Set());
-        setSelectedPanelIds(new Set());
-        setSelectedWidgetIds(new Set());
-        return;
-      }
-
       if (activeTool === "draw-strut" && strutDrawMode === "straight" && drawState) {
         event.stopPropagation();
         const sourceNode = sceneDataRef.current.nodes[drawState.fromNodeId];
@@ -403,35 +385,16 @@ export function Scene({
   const handleNodeClick = useCallback(
     (nodeId: string, face: FaceName | null, event: ThreeEvent<MouseEvent>) => {
       const clickedNode = sceneDataRef.current.nodes[nodeId];
-      if (activeTool !== "select" && clickedNode) onFocusPoint(clickedNode.position);
+      if (clickedNode) onFocusPoint(clickedNode.position);
 
-      if (activeTool === "select") {
+      if (event.nativeEvent.shiftKey) {
         event.stopPropagation();
-
-        if (selectedIds.has(nodeId) && face) {
-          startFaceDragRef.current(face, event.nativeEvent as unknown as PointerEvent);
-          return;
-        }
-
-        const node = sceneDataRef.current.nodes[nodeId];
-        if (node) onFocusPoint(node.position);
-
         setSelectedIds((prev) => {
           const next = new Set(prev);
-          if (event.nativeEvent.shiftKey) {
-            if (next.has(nodeId)) next.delete(nodeId);
-            else next.add(nodeId);
-          } else {
-            next.clear();
-            next.add(nodeId);
-          }
+          if (next.has(nodeId)) next.delete(nodeId);
+          else next.add(nodeId);
           return next;
         });
-        if (!event.nativeEvent.shiftKey) {
-          setSelectedStrutIds(new Set());
-          setSelectedPanelIds(new Set());
-          setSelectedWidgetIds(new Set());
-        }
         return;
       }
 
@@ -553,18 +516,14 @@ export function Scene({
       event.stopPropagation();
       event.nativeEvent.preventDefault();
 
-      setSceneData((prev) => removeNodeFromScene(prev, nodeId));
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        next.delete(nodeId);
-        return next;
-      });
-
-      if (drawState?.fromNodeId === nodeId) {
-        setDrawState(null);
-      }
+      setSelectedIds(new Set([nodeId]));
+      setSelectedStrutIds(new Set());
+      setSelectedPanelIds(new Set());
+      setSelectedWidgetIds(new Set());
+      const node = sceneDataRef.current.nodes[nodeId];
+      if (node) onFocusPoint(node.position);
     },
-    [drawState],
+    [onFocusPoint],
   );
 
   const handleStrutContextMenu = useCallback(
@@ -572,38 +531,27 @@ export function Scene({
       event.stopPropagation();
       event.nativeEvent.preventDefault();
 
-      setSceneData((prev) => removeStrutFromScene(prev, strutId));
-      setSelectedStrutIds((prev) => {
-        const next = new Set(prev);
-        next.delete(strutId);
-        return next;
-      });
+      setSelectedIds(new Set());
+      setSelectedStrutIds(new Set([strutId]));
+      setSelectedPanelIds(new Set());
+      setSelectedWidgetIds(new Set());
       setDrawState(null);
+      onFocusPoint(event.point);
     },
-    [],
+    [onFocusPoint],
   );
 
   const handleStrutClick = useCallback(
     (strutId: string, point: THREE.Vector3, event: ThreeEvent<MouseEvent>) => {
-      if (activeTool === "select") {
+      if (event.nativeEvent.shiftKey) {
         event.stopPropagation();
         onFocusPoint(point);
         setSelectedStrutIds((prev) => {
           const next = new Set(prev);
-          if (event.nativeEvent.shiftKey) {
-            if (next.has(strutId)) next.delete(strutId);
-            else next.add(strutId);
-          } else {
-            next.clear();
-            next.add(strutId);
-          }
+          if (next.has(strutId)) next.delete(strutId);
+          else next.add(strutId);
           return next;
         });
-        if (!event.nativeEvent.shiftKey) {
-          setSelectedIds(new Set());
-          setSelectedPanelIds(new Set());
-          setSelectedWidgetIds(new Set());
-        }
         return;
       }
 
@@ -746,28 +694,18 @@ export function Scene({
 
   const handlePanelClick = useCallback(
     (panelId: string, event: ThreeEvent<MouseEvent>) => {
-      if (activeTool !== "select") return;
+      if (!event.nativeEvent.shiftKey) return;
 
       event.stopPropagation();
       onFocusPoint(event.point);
       setSelectedPanelIds((prev) => {
         const next = new Set(prev);
-        if (event.nativeEvent.shiftKey) {
-          if (next.has(panelId)) next.delete(panelId);
-          else next.add(panelId);
-        } else {
-          next.clear();
-          next.add(panelId);
-        }
+        if (next.has(panelId)) next.delete(panelId);
+        else next.add(panelId);
         return next;
       });
-      if (!event.nativeEvent.shiftKey) {
-        setSelectedIds(new Set());
-        setSelectedStrutIds(new Set());
-        setSelectedWidgetIds(new Set());
-      }
     },
-    [activeTool, onFocusPoint],
+    [onFocusPoint],
   );
 
   const handlePanelContextMenu = useCallback(
@@ -775,348 +713,42 @@ export function Scene({
       event.stopPropagation();
       event.nativeEvent.preventDefault();
 
-      setSceneData((prev) => removePanelFromScene(prev, panelId));
-      setSelectedPanelIds((prev) => {
-        const next = new Set(prev);
-        next.delete(panelId);
-        return next;
-      });
+      setSelectedIds(new Set());
+      setSelectedStrutIds(new Set());
+      setSelectedPanelIds(new Set([panelId]));
+      setSelectedWidgetIds(new Set());
+      onFocusPoint(event.point);
     },
-    [],
+    [onFocusPoint],
   );
 
   const handleWidgetClick = useCallback(
     (widgetId: string, event: ThreeEvent<MouseEvent>) => {
-      if (activeTool !== "select") return;
+      if (!event.nativeEvent.shiftKey) return;
       event.stopPropagation();
       onFocusPoint(event.point);
       setSelectedWidgetIds((prev) => {
         const next = new Set(prev);
-        if (event.nativeEvent.shiftKey) {
-          if (next.has(widgetId)) next.delete(widgetId);
-          else next.add(widgetId);
-        } else {
-          next.clear();
-          next.add(widgetId);
-        }
+        if (next.has(widgetId)) next.delete(widgetId);
+        else next.add(widgetId);
         return next;
       });
-      if (!event.nativeEvent.shiftKey) {
-        setSelectedIds(new Set());
-        setSelectedStrutIds(new Set());
-        setSelectedPanelIds(new Set());
-      }
     },
-    [activeTool, onFocusPoint],
+    [onFocusPoint],
   );
 
   const handleWidgetContextMenu = useCallback(
     (widgetId: string, event: ThreeEvent<MouseEvent>) => {
       event.stopPropagation();
       event.nativeEvent.preventDefault();
-      setSceneData((prev) => removeWidgetFromScene(prev, widgetId));
-      setSelectedWidgetIds((prev) => {
-        const next = new Set(prev);
-        next.delete(widgetId);
-        return next;
-      });
+      setSelectedIds(new Set());
+      setSelectedStrutIds(new Set());
+      setSelectedPanelIds(new Set());
+      setSelectedWidgetIds(new Set([widgetId]));
+      onFocusPoint(event.point);
     },
-    [],
+    [onFocusPoint],
   );
-
-  const startFaceDragRef = useRef<(face: FaceName, e: PointerEvent) => void>(() => {});
-
-  const startFaceDrag = useCallback(
-    (face: FaceName, nativeEvent: PointerEvent) => {
-      const current = sceneDataRef.current;
-      const selIds = [...selectedIds];
-      if (selIds.length === 0) {
-        return;
-      }
-
-      const normal = FACE_NORMALS[face];
-      const faceNormal = new THREE.Vector3(normal[0], normal[1], normal[2]);
-
-      const initialPositions = new Map<string, THREE.Vector3>();
-      for (const id of selIds) {
-        const n = current.nodes[id];
-        if (n) initialPositions.set(id, vec3ToThree(n.position));
-      }
-
-      const connectingStruts: Array<{
-        strutId: string;
-        selNodeId: string;
-        unselNodeId: string;
-        selFace: FaceName;
-        unselFace: FaceName;
-        initialDist: number;
-      }> = [];
-      for (const strut of Object.values(current.struts)) {
-        if (isCornerStrutKind(strut.kind)) continue;
-
-        const aSel = selectedIds.has(strut.nodeA);
-        const bSel = selectedIds.has(strut.nodeB);
-        if (aSel !== bSel) {
-          const selNodeId = aSel ? strut.nodeA : strut.nodeB;
-          const unselNodeId = aSel ? strut.nodeB : strut.nodeA;
-          const selFace = aSel ? strut.faceA : strut.faceB;
-          const unselFace = aSel ? strut.faceB : strut.faceA;
-          const selNode = current.nodes[selNodeId];
-          const unselNode = current.nodes[unselNodeId];
-          if (!selNode || !unselNode) continue;
-
-          const dx = selNode.position.x - unselNode.position.x;
-          const dy = selNode.position.y - unselNode.position.y;
-          const dz = selNode.position.z - unselNode.position.z;
-          const alongAxis =
-            (faceNormal.x !== 0 ? dx : 0) +
-            (faceNormal.y !== 0 ? dy : 0) +
-            (faceNormal.z !== 0 ? dz : 0);
-          const dist = Math.abs(alongAxis);
-          if (dist < 0.01) continue;
-
-          connectingStruts.push({
-            strutId: strut.id,
-            selNodeId,
-            unselNodeId,
-            selFace,
-            unselFace,
-            initialDist: dist,
-          });
-        }
-      }
-
-      const rect = gl.domElement.getBoundingClientRect();
-      const ndc = new THREE.Vector2(
-        ((nativeEvent.clientX - rect.left) / rect.width) * 2 - 1,
-        -((nativeEvent.clientY - rect.top) / rect.height) * 2 + 1,
-      );
-
-      faceDragRef.current = {
-        faceNormal,
-        selectedIds: selIds,
-        initialPositions,
-        connectingStruts,
-        pointerLastNDC: ndc.clone(),
-        accumDelta: 0,
-      };
-
-
-      gl.domElement.style.cursor = "ew-resize";
-    },
-    [gl, selectedIds],
-  );
-
-  startFaceDragRef.current = startFaceDrag;
-
-  const handleFaceKnobClick = useCallback(
-    (nodeId: string, face: FaceName, event: ThreeEvent<MouseEvent>) => {
-      if (activeTool !== "select") return;
-      if (!selectedIds.has(nodeId)) return;
-      event.stopPropagation();
-      startFaceDrag(face, event.nativeEvent as unknown as PointerEvent);
-    },
-    [activeTool, selectedIds, startFaceDrag],
-  );
-
-  useEffect(() => {
-    const onMove = (e: PointerEvent) => {
-      if (faceDragRef.current) {
-        doFaceDrag(e);
-      }
-    };
-    const onUp = () => {
-      if (faceDragRef.current) {
-        endFaceDrag();
-      }
-    };
-
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    return () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-    };
-  });
-
-  const doFaceDrag = useCallback(
-    (nativeEvent: PointerEvent) => {
-      if (!faceDragRef.current) return;
-      const fd = faceDragRef.current;
-
-      const rect = gl.domElement.getBoundingClientRect();
-      const ndc = new THREE.Vector2(
-        ((nativeEvent.clientX - rect.left) / rect.width) * 2 - 1,
-        -((nativeEvent.clientY - rect.top) / rect.height) * 2 + 1,
-      );
-
-      const dragOrigin = fd.initialPositions.values().next().value;
-      if (!dragOrigin) return;
-
-      const ndcDelta = ndc.clone().sub(fd.pointerLastNDC);
-      fd.pointerLastNDC.copy(ndc);
-
-      const camDir = new THREE.Vector3();
-      camera.getWorldDirection(camDir);
-      const camRight = new THREE.Vector3().crossVectors(camDir, camera.up).normalize();
-      const camUp = new THREE.Vector3().crossVectors(camRight, camDir).normalize();
-
-      const scale = worldUnitsPerNdc(
-        camera as THREE.PerspectiveCamera | THREE.OrthographicCamera,
-        dragOrigin,
-        rect.height,
-      );
-
-      const worldDX = ndcDelta.x * scale * camRight.dot(fd.faceNormal);
-      const worldDY = ndcDelta.y * scale * camUp.dot(fd.faceNormal);
-      fd.accumDelta += worldDX + worldDY;
-
-      let snappedDelta = fd.accumDelta;
-
-      if (fd.connectingStruts.length > 0) {
-        const validDeltas: number[] = [];
-        for (const strutInfo of fd.connectingStruts) {
-          const strutValid: number[] = [];
-          for (const validLen of VALID_STRUT_LENGTHS) {
-            strutValid.push(validLen - strutInfo.initialDist);
-          }
-          if (validDeltas.length === 0) {
-            validDeltas.push(...strutValid);
-          } else {
-            const intersect = validDeltas.filter((d) => strutValid.includes(d));
-            validDeltas.length = 0;
-            validDeltas.push(...intersect);
-          }
-        }
-
-        if (validDeltas.length > 0) {
-          validDeltas.sort(
-            (a, b) =>
-              Math.abs(a - snappedDelta) - Math.abs(b - snappedDelta),
-          );
-          snappedDelta = validDeltas[0];
-        } else {
-          snappedDelta = Math.round(fd.accumDelta);
-        }
-      } else {
-        snappedDelta = Math.round(fd.accumDelta);
-      }
-
-      const deltaVec = fd.faceNormal.clone().multiplyScalar(snappedDelta);
-
-      const newPositions = new Map<string, THREE.Vector3>();
-      for (const id of fd.selectedIds) {
-        const initial = fd.initialPositions.get(id);
-        if (initial) {
-          newPositions.set(id, initial.clone().add(deltaVec));
-        }
-      }
-
-      const previewNodes = { ...sceneDataRef.current.nodes };
-      for (const [id, pos] of newPositions) {
-        previewNodes[id] = {
-          ...previewNodes[id],
-          position: {
-            x: Math.round(pos.x),
-            y: Math.round(pos.y),
-            z: Math.round(pos.z),
-          },
-        };
-      }
-      if (hasNodeContact({ ...sceneDataRef.current, nodes: previewNodes })) {
-        return;
-      }
-
-      for (const id of fd.selectedIds) {
-        const ref = nodeRefs.current.get(id);
-        const pos = newPositions.get(id);
-        if (ref && pos) {
-          ref.position.copy(pos);
-        }
-      }
-
-    },
-    [camera, gl],
-  );
-
-  const endFaceDrag = useCallback(() => {
-    if (!faceDragRef.current) return;
-    const fd = faceDragRef.current;
-
-    setSceneData((prev) => {
-      let result = { ...prev, nodes: { ...prev.nodes } };
-
-      for (const id of fd.selectedIds) {
-        const ref = nodeRefs.current.get(id);
-        if (ref) {
-          const snapped = {
-            x: Math.round(ref.position.x),
-            y: Math.round(ref.position.y),
-            z: Math.round(ref.position.z),
-          };
-          ref.position.set(snapped.x, snapped.y, snapped.z);
-          result.nodes[id] = {
-            ...result.nodes[id],
-            position: snapped,
-          };
-        }
-      }
-
-      if (hasNodeContact(result)) {
-        for (const id of fd.selectedIds) {
-          const initial = fd.initialPositions.get(id);
-          const ref = nodeRefs.current.get(id);
-          if (initial && ref) {
-            ref.position.copy(initial);
-          }
-        }
-        return prev;
-      }
-
-      for (const info of fd.connectingStruts) {
-        const selNode = result.nodes[info.selNodeId];
-        const unselNode = result.nodes[info.unselNodeId];
-        if (!selNode || !unselNode) continue;
-
-        const dx = selNode.position.x - unselNode.position.x;
-        const dy = selNode.position.y - unselNode.position.y;
-        const dz = selNode.position.z - unselNode.position.z;
-        const newDist =
-          Math.abs(fd.faceNormal.x * dx) +
-          Math.abs(fd.faceNormal.y * dy) +
-          Math.abs(fd.faceNormal.z * dz);
-
-        if (!VALID_STRUT_LENGTHS.includes(newDist)) continue;
-
-        const newStrut: StrutData = {
-          id: crypto.randomUUID(),
-          nodeA: info.selNodeId,
-          faceA: info.selFace,
-          nodeB: info.unselNodeId,
-          faceB: info.unselFace,
-          length: newDist,
-        };
-
-        result = removeStrutFromScene(result, info.strutId);
-        if (
-          canConnectStrut(
-            result,
-            newStrut.nodeA,
-            newStrut.faceA,
-            newStrut.nodeB,
-            newStrut.faceB,
-          )
-        ) {
-          result = addStrutToScene(result, newStrut);
-        }
-      }
-
-      return result;
-    });
-
-    faceDragRef.current = null;
-    gl.domElement.style.cursor = "";
-  }, [gl]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -1158,7 +790,7 @@ export function Scene({
         setSelectedWidgetIds(new Set());
       }
 
-      if (activeTool === "select" && e.key.toLowerCase() === "f" && selectedPanelIds.size > 0) {
+      if (e.key.toLowerCase() === "f" && selectedPanelIds.size > 0) {
         e.preventDefault();
         setSceneData((prev) => {
           let result = prev;
@@ -1169,7 +801,7 @@ export function Scene({
         });
       }
 
-      if (activeTool === "select" && e.key.toLowerCase() === "r" && selectedWidgetIds.size > 0) {
+      if (e.key.toLowerCase() === "r" && selectedWidgetIds.size > 0) {
         e.preventDefault();
         setSceneData((prev) => {
           let result = prev;
@@ -1180,7 +812,7 @@ export function Scene({
         });
       }
 
-      if (activeTool === "select" && e.key.toLowerCase() === "p") {
+      if (e.key.toLowerCase() === "p") {
         if (selectedStrutIds.size < 3) return;
         e.preventDefault();
         setSceneData((prev) => {
@@ -1197,8 +829,6 @@ export function Scene({
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [activeTool, selectedIds, selectedPanelIds, selectedStrutIds, selectedWidgetIds]);
-
-  const anySelected = selectedIds.size > 0;
 
   useEffect(() => {
     if (!drawState) {
@@ -1239,7 +869,11 @@ export function Scene({
 
   return (
     <group>
-      <GroundPlane onClick={handleGroundClick} onPointerMove={handleGroundPointerMove} />
+      <GroundPlane
+          interactive
+        onClick={handleGroundClick}
+        onPointerMove={handleGroundPointerMove}
+      />
 
       {drawState && (
         <DrawPreview
@@ -1264,6 +898,8 @@ export function Scene({
           panel={panel}
           sceneData={sceneData}
           selected={selectedPanelIds.has(panel.id)}
+          hovered={hoveredPart === `panel:${panel.id}`}
+          onHoverChange={(hovered) => updateHoveredPart(`panel:${panel.id}`, hovered)}
           onClick={handlePanelClick}
           onContextMenu={handlePanelContextMenu}
         />
@@ -1275,6 +911,8 @@ export function Scene({
           widget={widget}
           sceneData={sceneData}
           selected={selectedWidgetIds.has(widget.id)}
+          hovered={hoveredPart === `widget:${widget.id}`}
+          onHoverChange={(hovered) => updateHoveredPart(`widget:${widget.id}`, hovered)}
           onClick={handleWidgetClick}
           onContextMenu={handleWidgetContextMenu}
         />
@@ -1286,18 +924,14 @@ export function Scene({
           node={node}
           sceneData={sceneData}
           selected={selectedIds.has(node.id)}
+          hovered={hoveredPart === `node:${node.id}`}
+          onHoverChange={(hovered) => updateHoveredPart(`node:${node.id}`, hovered)}
           activeTool={activeTool}
           drawFromId={drawState?.fromNodeId ?? null}
           drawFromFace={drawState?.fromFace ?? null}
-          isDragging={faceDragRef.current !== null && faceDragRef.current.selectedIds.includes(node.id)}
           faceSelectionRequired={strutDrawMode === "corner"}
           onNodeClick={handleNodeClick}
           onNodeContextMenu={handleNodeContextMenu}
-          onFaceKnobClick={handleFaceKnobClick}
-          refTracker={(ref) => {
-            if (ref) nodeRefs.current.set(node.id, ref);
-            else nodeRefs.current.delete(node.id);
-          }}
         />
       ))}
 
@@ -1307,14 +941,13 @@ export function Scene({
           strut={strut}
           sceneData={sceneData}
           selected={selectedStrutIds.has(strut.id)}
+          hovered={hoveredPart === `strut:${strut.id}`}
+          onHoverChange={(hovered) => updateHoveredPart(`strut:${strut.id}`, hovered)}
           onClick={handleStrutClick}
           onContextMenu={handleStrutContextMenu}
         />
       ))}
 
-      {anySelected && activeTool === "select" && !faceDragRef.current && (
-        <SelectionBox sceneData={sceneData} selectedIds={selectedIds} />
-      )}
     </group>
   );
 }
@@ -1582,50 +1215,12 @@ function PreviewRouteSegment({
   );
 }
 
-function SelectionBox({
-  sceneData,
-  selectedIds,
-}: {
-  sceneData: SceneData;
-  selectedIds: Set<string>;
-}) {
-  const allNodes = [...selectedIds]
-    .map((id) => sceneData.nodes[id])
-    .filter(Boolean) as NodeData[];
-
-  if (allNodes.length === 0) return null;
-
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-
-  for (const n of allNodes) {
-    minX = Math.min(minX, n.position.x - nodeSize / 2);
-    minY = Math.min(minY, n.position.y - nodeSize / 2);
-    minZ = Math.min(minZ, n.position.z - nodeSize / 2);
-    maxX = Math.max(maxX, n.position.x + nodeSize / 2);
-    maxY = Math.max(maxY, n.position.y + nodeSize / 2);
-    maxZ = Math.max(maxZ, n.position.z + nodeSize / 2);
-  }
-
-  const centerX = (minX + maxX) / 2;
-  const centerY = (minY + maxY) / 2;
-  const centerZ = (minZ + maxZ) / 2;
-  const sizeX = maxX - minX + 0.1;
-  const sizeY = maxY - minY + 0.1;
-  const sizeZ = maxZ - minZ + 0.1;
-
-  return (
-    <lineSegments position={[centerX, centerY, centerZ]}>
-      <edgesGeometry args={[new THREE.BoxGeometry(sizeX, sizeY, sizeZ)]} />
-      <lineBasicMaterial color="#e94560" transparent opacity={0.6} />
-    </lineSegments>
-  );
-}
-
 function GroundPlane({
+  interactive,
   onClick,
   onPointerMove,
 }: {
+  interactive: boolean;
   onClick: (event: ThreeEvent<MouseEvent>) => void;
   onPointerMove: (event: ThreeEvent<PointerEvent>) => void;
 }) {
@@ -1633,8 +1228,8 @@ function GroundPlane({
     <mesh
       rotation={[-Math.PI / 2, 0, 0]}
       position={[0, GROUND_PLANE_Y, 0]}
-      onClick={onClick}
-      onPointerMove={onPointerMove}
+      onClick={interactive ? onClick : undefined}
+      onPointerMove={interactive ? onPointerMove : undefined}
     >
       <planeGeometry args={[200, 200]} />
       <meshBasicMaterial
@@ -1652,38 +1247,31 @@ interface NodeMeshProps {
   node: NodeData;
   sceneData: SceneData;
   selected: boolean;
+  hovered: boolean;
+  onHoverChange: (hovered: boolean) => void;
   activeTool: Tool;
   drawFromId: string | null;
   drawFromFace: FaceName | null;
-  isDragging: boolean;
   faceSelectionRequired: boolean;
   onNodeClick: (nodeId: string, face: FaceName | null, event: ThreeEvent<MouseEvent>) => void;
   onNodeContextMenu: (nodeId: string, event: ThreeEvent<MouseEvent>) => void;
-  onFaceKnobClick: (nodeId: string, face: FaceName, event: ThreeEvent<MouseEvent>) => void;
-  refTracker: (ref: THREE.Group | null) => void;
 }
 
 function NodeMesh({
   node,
   sceneData,
   selected,
+  hovered,
+  onHoverChange,
   activeTool,
   drawFromId,
   drawFromFace,
-  isDragging,
   faceSelectionRequired,
   onNodeClick,
   onNodeContextMenu,
-  onFaceKnobClick,
-  refTracker,
 }: NodeMeshProps) {
   const groupRef = useRef<THREE.Group>(null);
   const halfSize = nodeSize / 2;
-
-  useEffect(() => {
-    refTracker(groupRef.current);
-    return () => refTracker(null);
-  }, [refTracker]);
 
   const isOccupied = (face: string) => {
     const attachments = sceneData.nodes[node.id]?.attachments;
@@ -1725,14 +1313,6 @@ function NodeMesh({
     [node.id, onNodeClick],
   );
 
-  const handleFaceKnobClick = useCallback(
-    (face: FaceName, e: ThreeEvent<MouseEvent>) => {
-      e.stopPropagation();
-      onFaceKnobClick(node.id, face, e);
-    },
-    [node.id, onFaceKnobClick],
-  );
-
   const handleContextMenu = useCallback(
     (e: ThreeEvent<MouseEvent>) => {
       onNodeContextMenu(node.id, e);
@@ -1744,15 +1324,21 @@ function NodeMesh({
     <group
       ref={groupRef}
       position={[node.position.x, node.position.y, node.position.z]}
+      onPointerOver={(event) => {
+        event.stopPropagation();
+        onHoverChange(true);
+      }}
+      onPointerOut={() => onHoverChange(false)}
     >
       <mesh castShadow onClick={handleClick} onContextMenu={handleContextMenu}>
         <boxGeometry args={[nodeSize, nodeSize, nodeSize]} />
         <meshStandardMaterial
-          color={isDragging ? "#e9a040" : selected ? "#e94560" : SCENE_COLORS.node}
+          color={selected ? "#e94560" : SCENE_COLORS.node}
           flatShading={true}
           transparent
           opacity={0.9}
         />
+        <HoverEdges visible={hovered} />
       </mesh>
 
       <lineSegments>
@@ -1769,10 +1355,8 @@ function NodeMesh({
           occupied={isOccupied(name)}
           highlighted={isDrawSource && drawFromFace === name}
           activeTool={activeTool}
-          draggable={selected && activeTool === "select"}
           drawable={activeTool === "draw-strut" && faceSelectionRequired}
           widgetable={activeTool === "place-widget" && !isOccupied(name)}
-          onFaceKnobClick={(e) => handleFaceKnobClick(name as FaceName, e)}
           onFaceDrawClick={(e) => onNodeClick(node.id, name as FaceName, e)}
         />
       ))}
@@ -1787,10 +1371,8 @@ interface FaceIndicatorProps {
   occupied: boolean;
   highlighted: boolean;
   activeTool: Tool;
-  draggable: boolean;
   drawable: boolean;
   widgetable: boolean;
-  onFaceKnobClick: (e: ThreeEvent<MouseEvent>) => void;
   onFaceDrawClick: (e: ThreeEvent<MouseEvent>) => void;
 }
 
@@ -1801,10 +1383,8 @@ function FaceIndicator({
   occupied,
   highlighted,
   activeTool,
-  draggable,
   drawable,
   widgetable,
-  onFaceKnobClick,
   onFaceDrawClick,
 }: FaceIndicatorProps) {
   const pos: [number, number, number] = [
@@ -1827,26 +1407,20 @@ function FaceIndicator({
         ? 0.8
         : activeTool === "place-widget"
           ? 0.8
-        : draggable
-          ? 0.7
-          : 0.3;
+        : 0.3;
 
-  const size = draggable ? 0.28 : 0.22;
+  const size = 0.22;
 
   return (
     <mesh
       position={pos}
       renderOrder={1}
       onClick={
-        draggable
+        drawable || widgetable
           ? (e: ThreeEvent<MouseEvent>) => {
-              onFaceKnobClick(e);
+              onFaceDrawClick(e);
             }
-          : drawable || widgetable
-            ? (e: ThreeEvent<MouseEvent>) => {
-                onFaceDrawClick(e);
-              }
-            : undefined
+          : undefined
       }
     >
       <boxGeometry args={[size, size, size]} />
@@ -1859,6 +1433,8 @@ interface StrutMeshProps {
   strut: StrutData;
   sceneData: SceneData;
   selected: boolean;
+  hovered: boolean;
+  onHoverChange: (hovered: boolean) => void;
   onClick: (strutId: string, point: THREE.Vector3, event: ThreeEvent<MouseEvent>) => void;
   onContextMenu: (strutId: string, event: ThreeEvent<MouseEvent>) => void;
 }
@@ -1867,12 +1443,16 @@ function PanelMesh({
   panel,
   sceneData,
   selected,
+  hovered,
+  onHoverChange,
   onClick,
   onContextMenu,
 }: {
   panel: PanelData;
   sceneData: SceneData;
   selected: boolean;
+  hovered: boolean;
+  onHoverChange: (hovered: boolean) => void;
   onClick: (panelId: string, event: ThreeEvent<MouseEvent>) => void;
   onContextMenu: (panelId: string, event: ThreeEvent<MouseEvent>) => void;
 }) {
@@ -1924,11 +1504,17 @@ function PanelMesh({
       renderOrder={-1}
       onClick={(event) => onClick(panel.id, event)}
       onContextMenu={(event) => onContextMenu(panel.id, event)}
+      onPointerOver={(event) => {
+        event.stopPropagation();
+        onHoverChange(true);
+      }}
+      onPointerOut={() => onHoverChange(false)}
     >
       <meshStandardMaterial
         color={selected ? "#e9a040" : SCENE_COLORS.panel}
         side={THREE.DoubleSide}
       />
+      <HoverEdges visible={hovered} />
     </mesh>
   );
 }
@@ -1945,12 +1531,16 @@ function WidgetMesh({
   widget,
   sceneData,
   selected,
+  hovered,
+  onHoverChange,
   onClick,
   onContextMenu,
 }: {
   widget: WidgetData;
   sceneData: SceneData;
   selected: boolean;
+  hovered: boolean;
+  onHoverChange: (hovered: boolean) => void;
   onClick: (widgetId: string, event: ThreeEvent<MouseEvent>) => void;
   onContextMenu: (widgetId: string, event: ThreeEvent<MouseEvent>) => void;
 }) {
@@ -1971,60 +1561,79 @@ function WidgetMesh({
       quaternion={quaternion}
       onClick={(event) => onClick(widget.id, event)}
       onContextMenu={(event) => onContextMenu(widget.id, event)}
+      onPointerOver={(event) => {
+        event.stopPropagation();
+        onHoverChange(true);
+      }}
+      onPointerOut={() => onHoverChange(false)}
     >
-      {widget.kind === "antenna" && <AntennaWidget color={color} />}
-      {widget.kind === "rocket-engine" && <RocketEngineWidget color={color} />}
-      {widget.kind === "cockpit" && <CockpitWidget color={color} />}
+      {widget.kind === "antenna" && <AntennaWidget color={color} hovered={hovered} />}
+      {widget.kind === "rocket-engine" && <RocketEngineWidget color={color} hovered={hovered} />}
+      {widget.kind === "cockpit" && <CockpitWidget color={color} hovered={hovered} />}
     </group>
   );
 }
 
-function AntennaWidget({ color }: { color: string }) {
+function AntennaWidget({ color, hovered }: { color: string; hovered: boolean }) {
   return (
     <group>
       <mesh position={[0, 0.5, 0]} castShadow>
         <cylinderGeometry args={[0.09, 0.09, 1]} />
         <meshStandardMaterial color={color} />
+        <HoverEdges visible={hovered} />
       </mesh>
       <mesh position={[0, 1.08, 0]} castShadow>
         <coneGeometry args={[0.18, 0.3, 12]} />
         <meshStandardMaterial color="#d7e7f0" />
+        <HoverEdges visible={hovered} />
       </mesh>
     </group>
   );
 }
 
-function RocketEngineWidget({ color }: { color: string }) {
+function RocketEngineWidget({ color, hovered }: { color: string; hovered: boolean }) {
   return (
     <group>
       <mesh position={[0, 0.32, 0]} castShadow>
         <cylinderGeometry args={[0.33, 0.28, 0.64, 16]} />
         <meshStandardMaterial color={color} />
+        <HoverEdges visible={hovered} />
       </mesh>
       <mesh position={[0, 0.82, 0]} rotation={[Math.PI, 0, 0]} castShadow>
         <coneGeometry args={[0.38, 0.48, 16]} />
         <meshStandardMaterial color="#697b88" />
+        <HoverEdges visible={hovered} />
       </mesh>
     </group>
   );
 }
 
-function CockpitWidget({ color }: { color: string }) {
+function CockpitWidget({ color, hovered }: { color: string; hovered: boolean }) {
   return (
     <group>
       <mesh position={[0, 0.32, 0]} castShadow>
         <boxGeometry args={[0.8, 0.64, 0.72]} />
         <meshStandardMaterial color={color} />
+        <HoverEdges visible={hovered} />
       </mesh>
       <mesh position={[0, 0.67, 0.08]} rotation={[0, Math.PI / 4, 0]} castShadow>
         <coneGeometry args={[0.43, 0.34, 4]} />
         <meshStandardMaterial color="#86b9d0" metalness={0.15} roughness={0.28} />
+        <HoverEdges visible={hovered} />
       </mesh>
     </group>
   );
 }
 
-function StrutMesh({ strut, sceneData, selected, onClick, onContextMenu }: StrutMeshProps) {
+function StrutMesh({
+  strut,
+  sceneData,
+  selected,
+  hovered,
+  onHoverChange,
+  onClick,
+  onContextMenu,
+}: StrutMeshProps) {
   const nodeA = sceneData.nodes[strut.nodeA];
   const nodeB = sceneData.nodes[strut.nodeB];
   if (!nodeA || !nodeB) return null;
@@ -2042,7 +1651,13 @@ function StrutMesh({ strut, sceneData, selected, onClick, onContextMenu }: Strut
     : undefined;
 
   return (
-    <group>
+    <group
+      onPointerOver={(event) => {
+        event.stopPropagation();
+        onHoverChange(true);
+      }}
+      onPointerOut={() => onHoverChange(false)}
+    >
       {routePoints.slice(0, -1).map((point, index) => (
         <StrutSegmentMesh
           key={index}
@@ -2055,6 +1670,7 @@ function StrutMesh({ strut, sceneData, selected, onClick, onContextMenu }: Strut
             : isCornerStrutKind(strut.kind)
               ? SCENE_COLORS.planarCornerStrut
               : SCENE_COLORS.straightStrut}
+          hovered={hovered}
           onClick={(event) => onClick(strut.id, event.point.clone(), event)}
           onContextMenu={(event) => onContextMenu(strut.id, event)}
         />
@@ -2066,12 +1682,14 @@ function StrutMesh({ strut, sceneData, selected, onClick, onContextMenu }: Strut
           halfWidth={halfWidth}
           flatNormal={flatNormal}
           color={selected ? "#e9a040" : SCENE_COLORS.planarCornerStrut}
+          hovered={hovered}
         />
       ))}
       {routePoints.map((point, index) => (
         <mesh key={`joint-${index}`} position={point}>
           <sphereGeometry args={[halfWidth, 8, 8]} />
           <meshStandardMaterial color="#556677" flatShading={true} />
+          <HoverEdges visible={hovered} />
         </mesh>
       ))}
     </group>
@@ -2083,6 +1701,7 @@ function CornerJointFill({
   halfWidth,
   flatNormal,
   color,
+  hovered = false,
   transparent = false,
   opacity = 1,
 }: {
@@ -2090,6 +1709,7 @@ function CornerJointFill({
   halfWidth: number;
   flatNormal?: THREE.Vector3;
   color: string;
+  hovered?: boolean;
   transparent?: boolean;
   opacity?: number;
 }) {
@@ -2108,6 +1728,7 @@ function CornerJointFill({
         polygonOffsetFactor={1}
         polygonOffsetUnits={1}
       />
+      <HoverEdges visible={hovered} />
     </mesh>
   );
 }
@@ -2157,6 +1778,7 @@ function StrutSegmentMesh({
   halfWidth,
   flatNormal,
   color,
+  hovered,
   onClick,
   onContextMenu,
 }: {
@@ -2165,6 +1787,7 @@ function StrutSegmentMesh({
   halfWidth: number;
   flatNormal?: THREE.Vector3;
   color: string;
+  hovered: boolean;
   onClick: (event: ThreeEvent<MouseEvent>) => void;
   onContextMenu: (event: ThreeEvent<MouseEvent>) => void;
 }) {
@@ -2188,6 +1811,7 @@ function StrutSegmentMesh({
       >
         <boxGeometry args={[halfWidth * 2, length, halfWidth * 2]} />
         <meshStandardMaterial color={color} flatShading={true} />
+        <HoverEdges visible={hovered} />
       </mesh>
       <mesh
         position={midPoint}
@@ -2199,5 +1823,18 @@ function StrutSegmentMesh({
         <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
     </>
+  );
+}
+
+function HoverEdges({ visible }: { visible: boolean }) {
+  if (!visible) return null;
+  return (
+    <Edges
+      color={HOVER_EDGE_COLOR}
+      lineWidth={1.5}
+      threshold={10}
+      depthTest={false}
+      renderOrder={20}
+    />
   );
 }

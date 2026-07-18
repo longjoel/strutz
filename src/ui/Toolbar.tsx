@@ -1,30 +1,51 @@
-import { useEffect } from "react";
-import type { Tool } from "./types";
+import { useCallback, useEffect } from "react";
+import type { StrutDrawMode, Tool } from "./types";
 
-const TOOLS: { id: Tool; label: string; shortcut: string }[] = [
-  { id: "select", label: "Select/Move", shortcut: "V" },
-  { id: "draw-strut", label: "Draw Strut", shortcut: "S" },
-  { id: "place-widget", label: "Widgets", shortcut: "A" },
+type ToolbarTool = "structural" | "external" | "widgets";
+
+const TOOLS: { id: ToolbarTool; label: string; shortcut: string }[] = [
+  { id: "structural", label: "Structural", shortcut: "S" },
+  { id: "external", label: "External", shortcut: "E" },
+  { id: "widgets", label: "Widgets", shortcut: "A" },
 ];
 
 interface ToolbarProps {
   activeTool: Tool;
+  strutDrawMode: StrutDrawMode;
   onSelectTool: (tool: Tool) => void;
+  onSelectStrutDrawMode: (mode: StrutDrawMode) => void;
 }
 
 export function Toolbar({
   activeTool,
+  strutDrawMode,
   onSelectTool,
+  onSelectStrutDrawMode,
 }: ToolbarProps) {
+  const selectToolbarTool = useCallback((tool: ToolbarTool) => {
+    if (tool === "widgets") {
+      onSelectTool("place-widget");
+      return;
+    }
+    onSelectTool("draw-strut");
+    onSelectStrutDrawMode(tool === "structural" ? "straight" : "corner");
+  }, [onSelectStrutDrawMode, onSelectTool]);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return;
       const tool = TOOLS.find((t) => t.shortcut.toLowerCase() === e.key.toLowerCase());
-      if (tool) onSelectTool(tool.id);
+      if (tool) selectToolbarTool(tool.id);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [onSelectTool]);
+  }, [selectToolbarTool]);
+
+  const activeToolbarTool: ToolbarTool = activeTool === "place-widget"
+    ? "widgets"
+    : strutDrawMode === "corner"
+      ? "external"
+      : "structural";
 
   return (
     <div
@@ -44,15 +65,15 @@ export function Toolbar({
         <button
           key={tool.id}
           title={`${tool.label} (${tool.shortcut})`}
-          onClick={() => onSelectTool(tool.id)}
+          onClick={() => selectToolbarTool(tool.id)}
           style={{
             width: 40,
             height: 40,
             margin: "0 auto",
-            border: tool.id === activeTool ? "1px solid #4ecca3" : "1px solid transparent",
+            border: tool.id === activeToolbarTool ? "1px solid #4ecca3" : "1px solid transparent",
             borderRadius: 6,
-            background: tool.id === activeTool ? "#243d5a" : "transparent",
-            color: tool.id === activeTool ? "#d7e7f0" : "#86a0ba",
+            background: tool.id === activeToolbarTool ? "#243d5a" : "transparent",
+            color: tool.id === activeToolbarTool ? "#d7e7f0" : "#86a0ba",
             cursor: "pointer",
             fontSize: 18,
             display: "flex",
@@ -67,13 +88,13 @@ export function Toolbar({
   );
 }
 
-function toolIcon(tool: Tool): string {
+function toolIcon(tool: ToolbarTool): string {
   switch (tool) {
-    case "select":
-      return "⬏";
-    case "draw-strut":
-      return "╪";
-    case "place-widget":
+    case "structural":
+      return "│";
+    case "external":
+      return "⌜";
+    case "widgets":
       return "⚙";
   }
 }
