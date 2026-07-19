@@ -7,7 +7,7 @@ This document is the domain contract for placement. UI previews and gestures may
 - A **node position** is the center of its cube.
 - An **attachment point** is the center of one node face.
 - A **strut length** is its clear face-to-face span, not the distance between node centers.
-- A **side** is `top` or `bottom` relative to the canonical normal calculated for a panel boundary. It is stable and is not based on camera orientation.
+- A panel **side** is persisted as `top` or `bottom` for compatibility. Geometry treats `top` as the assembly-relative outer skin and `bottom` as the inner skin. A canonical normal is used only when the panel center and assembly center coincide; camera orientation is never used.
 - Length and coordinate comparisons use `RULE_EPSILON` to absorb floating-point noise.
 
 The current catalog is defined once by `CONSTRUCTION_RULES` in `src/core/constants.ts`. The grid size and node size are 1 unit, strut width is 1 unit, and clear strut lengths are 1, 3, and 7 units.
@@ -22,7 +22,6 @@ glTF defines one coordinate unit as one meter. Strutz exports at `2/3` meter per
 2. Nodes are axis-aligned cubes of `nodeSize`.
 3. Two node volumes may neither overlap nor touch. With the current catalog, their centers must differ by more than 1 unit on at least one axis.
 4. A node face has one attachment slot. One strut or one widget can occupy it; panels do not consume face slots.
-5. Moving a selection is atomic. If any resulting node violates these constraints, none of the selected nodes move.
 
 Use `validateNodePlacement` for a candidate and `validateSceneNodePlacement` after a batch edit or import.
 
@@ -33,9 +32,14 @@ Use `validateNodePlacement` for a candidate and `validateSceneNodePlacement` aft
 3. The endpoint faces are opposite faces.
 4. The vector between attachment points lies on exactly one axis, which is also the source face axis.
 5. The attachment-point distance is a catalog strut length.
-6. Creating matching struts from a multi-node selection is atomic.
+6. A strut may not pass through an intermediate node volume.
+7. When a requested run encounters existing collinear nodes, those nodes become joints and the clear gaps are decomposed into catalog struts. For example, a requested length-7 run with a centered node becomes `3 + nodeSize + 3`.
+8. Perpendicular straight runs may cross only at a shared grid-aligned node. Placing a run across an existing strut inserts that node and subdivides both runs into catalog lengths.
+9. Collinear strut overlaps are invalid.
+10. If any resulting gap cannot be decomposed, or any required face is occupied, the entire requested run is rejected.
+11. Creating matching struts from a multi-node selection is atomic.
 
-For a straight strut of clear length `L`, node centers are separated by `L + nodeSize`. Use `validateStrutPlacement` for validation and `getStraightStrutTarget` for endpoint construction.
+For a straight strut of clear length `L`, node centers are separated by `L + nodeSize`. Use `validateStrutPlacement` for individual connections, `getStraightStrutTarget` for endpoint construction, and `planStraightStrutRun` for intersection-aware runs.
 
 ## Planar corner-strut placement
 
@@ -56,7 +60,11 @@ The rendered route runs from the source face center, through a half-node outward
 4. Traversal must return to its starting node and visit every selected strut exactly once. Disconnected loops, branches, and open chains are invalid.
 5. A valid loop can hold at most one `top` panel and one `bottom` panel. Panel identity is based on the set of boundary strut IDs, independent of selection order.
 6. Removing a boundary strut or endpoint node removes dependent panels.
-7. Coplanar loops create inset planar faces. Supported non-planar loops create faceted hull skins; paired planar-corner ribs use the specialized strip geometry.
+7. Every boundary strut contributes its panel-facing inward plane. For planar-corner struts this comes from the main diagonal run; the short endpoint stubs terminate inside their nodes and do not clip the panel opening. Coplanar node loops use the boundary runs' shared mid-surface, oriented by the node plane, for the requested skins; folded loops derive exposed planes from the local strut faces.
+8. One opening outline is shared by the inner and outer skins. It is the conservative intersection that clears every boundary strut across the panel's full thickness, preventing either skin from protruding into the frame. Pane vertices are valid triple-plane intersections that satisfy every oriented half-space; each surviving exposed plane produces one convex planar pane and coplanar duplicate planes are merged.
+9. When adjacent main boundary runs stop short at corner-strut endpoint stubs, a bevel plane joins their panel-facing endpoints so the pane cannot protrude through the physical corner. Redundant planes do not create seams; GPU triangles are generated only within a single coplanar pane.
+10. Plane sets that cannot bound at least one valid pane are rejected as `invalid-brush`; the editor does not fall back to a warped polygon or triangle fan.
+11. Concave panel volumes require multiple convex loops or a future convex-decomposition pass.
 
 Use `validatePanelPlacement` before placement. Omitting its `side` argument asks whether either side remains available.
 
@@ -73,5 +81,5 @@ Use `validateWidgetPlacement` before placement.
 - New documents include `schemaVersion`. A missing version is the legacy pre-versioned format; newer unsupported versions are rejected rather than opened destructively.
 - `attachments` is derived index data. `normalizeSceneAttachments` rebuilds it from struts and widgets after scene mutations and file loading.
 - Removing nodes and struts cascades to structurally dependent entities.
-- A user gesture that creates or moves several entities is committed as one scene update and therefore one undo step.
+- A user gesture that creates several entities is committed as one scene update and therefore one undo step.
 - Domain rules must remain independent of React, Three.js, Electron, and pointer events so alternate clients can reuse them.

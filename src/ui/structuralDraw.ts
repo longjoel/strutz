@@ -10,6 +10,48 @@ export interface StructuralDrawCandidate {
   length: number;
 }
 
+export type StructuralDrawAxis = "x" | "y" | "z";
+
+export type StructuralDrawShortcut =
+  | { kind: "length"; length: number }
+  | { kind: "axis"; axis: StructuralDrawAxis };
+
+export function getStructuralDrawShortcut(key: string): StructuralDrawShortcut | null {
+  const normalized = key.toLowerCase();
+  if (normalized === "x" || normalized === "y" || normalized === "z") {
+    return { kind: "axis", axis: normalized };
+  }
+  const length = Number(normalized);
+  return VALID_STRUT_LENGTHS.includes(length) ? { kind: "length", length } : null;
+}
+
+export function getFaceForAxisLock(
+  axis: StructuralDrawAxis,
+  currentFace: FaceName,
+  availableFaces: readonly FaceName[],
+): FaceName | null {
+  const facesByAxis: Record<StructuralDrawAxis, [FaceName, FaceName]> = {
+    x: ["right", "left"],
+    y: ["top", "bottom"],
+    z: ["front", "back"],
+  };
+  const candidates = facesByAxis[axis];
+  if (candidates.includes(currentFace) && availableFaces.includes(currentFace)) return currentFace;
+  return candidates.find((face) => availableFaces.includes(face)) ?? null;
+}
+
+export function getStructuralDirectionLabel(face: FaceName): string {
+  const labels: Record<FaceName, string> = {
+    right: "X+",
+    left: "X−",
+    top: "Y+",
+    bottom: "Y−",
+    front: "Z+",
+    back: "Z−",
+  };
+  return labels[face];
+}
+
 /** Pick the axis, sign, and catalog length whose endpoint is nearest the mouse on screen. */
 export function getNearestStructuralDrawCandidate(
   sourceNode: NodeData,

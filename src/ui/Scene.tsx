@@ -2,7 +2,7 @@ import { useRef, useCallback, useState, useEffect, useMemo } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import * as THREE from "three";
 import { ThreeEvent, useThree } from "@react-three/fiber";
-import { Edges } from "@react-three/drei";
+import { Edges, Html } from "@react-three/drei";
 import type { StrutDrawMode, Tool } from "./types";
 import type {
   SceneData,
@@ -17,37 +17,32 @@ import type {
 import {
   createNode,
   addNodeToScene,
+  addStraightStrutRunsToScene,
   removeNodeFromScene,
   canConnectStrut,
   addStrutToScene,
   removeStrutFromScene,
   createPanelFromStruts,
+  validatePanelPlacement,
   addPanelToScene,
   removePanelFromScene,
   flipPanelInScene,
-  getPanelBoundaryPoints,
-  getPanelHullStrip,
+  getPanelBrushGeometry,
   addWidgetToScene,
   removeWidgetFromScene,
   rotateWidgetInScene,
   getAttachmentWorldPosition,
   hasNodeContact,
 } from "../core/scene";
-import { nodeSize, strutWidth, VALID_STRUT_LENGTHS, oppositeFace } from "../core/constants";
+import { nodeSize, strutWidth, VALID_STRUT_LENGTHS } from "../core/constants";
 import {
   FACE_NORMALS as RULE_FACE_NORMALS,
   centerSpacingForStrutLength,
   corner45LengthFromAxisDelta,
   faceAxis,
-  getCoplanarPlane,
-  getPolygonNormal,
   getCorner45PlaneNormal as getRuleCorner45PlaneNormal,
   getStrutRoutePoints as getRuleStrutRoutePoints,
-  insetCoplanarPolygon,
-  insetHullPolygon,
   isCornerStrutKind,
-  offsetPlanePoints,
-  triangulatePolygon,
 } from "../core/rules";
 import {
   decomposeStrutRun as decomposeRunLength,
@@ -58,7 +53,14 @@ import {
 } from "../core/placement";
 import { SCENE_COLORS } from "./sceneColors";
 import { GROUND_PLANE_Y } from "./viewportConfig";
-import { getNearestStructuralDrawCandidate } from "./structuralDraw";
+import {
+  getFaceForAxisLock,
+  getNearestStructuralDrawCandidate,
+  getStructuralDirectionLabel,
+  getStructuralDrawShortcut,
+  type StructuralDrawAxis,
+} from "./structuralDraw";
+import { createStrutSurface, triangulateQuadSurface } from "../core/geometry";
 
 const FACE_COLORS: Record<string, string> = {
   top: "#4ecca3",
@@ -96,14 +98,6 @@ const NORMAL_TO_FACE: Record<string, FaceName> = {
 
 function vec3ToThree(v: { x: number; y: number; z: number }): THREE.Vector3 {
   return new THREE.Vector3(v.x, v.y, v.z);
-}
-
-function getDrawCandidatePosition(
-  sourceNode: NodeData,
-  fromFace: FaceName,
-  length: number,
-): THREE.Vector3 {
-  return vec3ToThree(getStraightStrutTarget(sourceNode, fromFace, length));
 }
 
 function getNearestDrawLength(
@@ -176,6 +170,11 @@ interface SceneProps {
   sceneData: SceneData;
   setSceneData: Dispatch<SetStateAction<SceneData>>;
   onFocusPoint: (point: { x: number; y: number; z: number }) => void;
+  selectedStrutIds: Set<string>;
+  setSelectedStrutIds: Dispatch<SetStateAction<Set<string>>>;
+  selectedPanelIds: Set<string>;
+  setSelectedPanelIds: Dispatch<SetStateAction<Set<string>>>;
+  panelPreviewSide: "top" | "bottom" | null;
 }
 
 export function Scene({
@@ -185,6 +184,11 @@ export function Scene({
   sceneData,
   setSceneData,
   onFocusPoint,
+  selectedStrutIds,
+  setSelectedStrutIds,
+  selectedPanelIds,
+  setSelectedPanelIds,
+  panelPreviewSide,
 }: SceneProps) {
   const [drawState, setDrawState] = useState<{
     fromNodeId: string;
@@ -193,9 +197,8 @@ export function Scene({
   } | null>(null);
   const [hoverDrawLength, setHoverDrawLength] = useState<number | null>(null);
   const [hoverCornerKey, setHoverCornerKey] = useState<string | null>(null);
+  const [drawAxisLock, setDrawAxisLock] = useState<StructuralDrawAxis | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [selectedStrutIds, setSelectedStrutIds] = useState<Set<string>>(new Set());
-  const [selectedPanelIds, setSelectedPanelIds] = useState<Set<string>>(new Set());
   const [selectedWidgetIds, setSelectedWidgetIds] = useState<Set<string>>(new Set());
   const [hoveredPart, setHoveredPart] = useState<string | null>(null);
   const sceneDataRef = useRef(sceneData);
@@ -256,43 +259,12 @@ export function Scene({
       const nextFocus = primarySource
         ? getStraightStrutTarget(primarySource, fromFace, length)
         : null;
-      setSceneData((prev) => {
-        const destinationFace = oppositeFace(fromFace);
-        const planned = drawState.sourceNodeIds.map((sourceNodeId) => {
-          const sourceNode = prev.nodes[sourceNodeId];
-          if (!sourceNode || sourceNode.attachments[fromFace]?.occupied) return null;
-
-          const position = getDrawCandidatePosition(sourceNode, fromFace, length);
-          const existingNode = Object.values(prev.nodes).find(
-            (node) => node.position.x === position.x && node.position.y === position.y && node.position.z === position.z,
-          );
-          return { sourceNodeId, position, existingNode };
-        });
-        if (planned.some((entry) => !entry)) return prev;
-
-        let result = prev;
-        for (const entry of planned) {
-          if (!entry) return prev;
-          const targetNode = entry.existingNode ?? createNode(entry.position);
-          const strut: StrutData = {
-            id: crypto.randomUUID(),
-            nodeA: entry.sourceNodeId,
-            faceA: fromFace,
-            nodeB: targetNode.id,
-            faceB: destinationFace,
-            length,
-          };
-
-          if (entry.existingNode) {
-            if (!canConnectStrut(result, strut.nodeA, strut.faceA, strut.nodeB, strut.faceB)) return prev;
-          } else {
-            result = addNodeToScene(result, targetNode);
-          }
-          result = addStrutToScene(result, strut);
-        }
-
-        return hasNodeContact(result) ? prev : result;
-      });
+      setSceneData((prev) => addStraightStrutRunsToScene(
+        prev,
+        drawState.sourceNodeIds,
+        fromFace,
+        length,
+      ));
       if (nextFocus) onFocusPoint(nextFocus);
       setDrawState(null);
     },
@@ -307,6 +279,7 @@ export function Scene({
       if (!sourceNode) return;
       const availableFaces = FACE_ENTRIES
         .map(([face]) => face)
+        .filter((face) => !drawAxisLock || faceAxis(face) === drawAxisLock)
         .filter((face) => drawState.sourceNodeIds.every((nodeId) =>
           !sceneDataRef.current.nodes[nodeId]?.attachments[face]?.occupied));
       const candidate = getNearestStructuralDrawCandidate(sourceNode, camera, pointerNdc, availableFaces);
@@ -316,7 +289,7 @@ export function Scene({
       setHoverDrawLength(candidate.length);
       setHoverCornerKey(null);
     },
-    [activeTool, camera, drawState, strutDrawMode],
+    [activeTool, camera, drawAxisLock, drawState, strutDrawMode],
   );
 
   const placeCorner45Strut = useCallback(
@@ -355,6 +328,7 @@ export function Scene({
         if (!sourceNode) return setDrawState(null);
         const availableFaces = FACE_ENTRIES
           .map(([face]) => face)
+          .filter((face) => !drawAxisLock || faceAxis(face) === drawAxisLock)
           .filter((face) => drawState.sourceNodeIds.every((nodeId) =>
             !sceneDataRef.current.nodes[nodeId]?.attachments[face]?.occupied));
         const candidate = getNearestStructuralDrawCandidate(
@@ -372,7 +346,7 @@ export function Scene({
 
       setDrawState(null);
     },
-    [activeTool, camera, drawState, placeDrawStrutAtLength, strutDrawMode],
+    [activeTool, camera, drawAxisLock, drawState, placeDrawStrutAtLength, strutDrawMode],
   );
 
   const handleGroundPointerMove = useCallback(
@@ -473,25 +447,24 @@ export function Scene({
         }
 
         const inferredFaces = getConnectionFacesBetweenNodes(fromNode, toNode);
-
-        if (
-          inferredFaces &&
-          canConnectStrut(
+        if (inferredFaces) {
+          const fromAttachment = getAttachmentWorldPosition(
             sceneDataRef.current,
             drawState.fromNodeId,
             inferredFaces.fromFace,
-            nodeId,
-            inferredFaces.toFace,
-          )
-        ) {
-          commitStrut(
-            drawState.fromNodeId,
-            inferredFaces.fromFace,
+          );
+          const toAttachment = getAttachmentWorldPosition(
+            sceneDataRef.current,
             nodeId,
             inferredFaces.toFace,
           );
-          setDrawState(null);
-          return;
+          const exactLength = vec3ToThree(fromAttachment).distanceTo(vec3ToThree(toAttachment));
+          const catalogLength = VALID_STRUT_LENGTHS.find((value) =>
+            Math.abs(value - exactLength) < 0.01);
+          if (catalogLength !== undefined) {
+            placeDrawStrutAtLength(catalogLength, inferredFaces.fromFace);
+            return;
+          }
         }
 
       }
@@ -754,6 +727,31 @@ export function Scene({
     const handler = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
+      const drawShortcut = drawState && strutDrawMode === "straight"
+        ? getStructuralDrawShortcut(e.key)
+        : null;
+      if (drawShortcut?.kind === "length") {
+        e.preventDefault();
+        placeDrawStrutAtLength(drawShortcut.length);
+        return;
+      }
+      if (drawShortcut?.kind === "axis") {
+        e.preventDefault();
+        const nextLock = drawAxisLock === drawShortcut.axis ? null : drawShortcut.axis;
+        setDrawAxisLock(nextLock);
+        if (nextLock) {
+          const availableFaces = FACE_ENTRIES
+            .map(([face]) => face)
+            .filter((face) => drawState!.sourceNodeIds.every((nodeId) =>
+              !sceneDataRef.current.nodes[nodeId]?.attachments[face]?.occupied));
+          const lockedFace = getFaceForAxisLock(nextLock, drawState!.fromFace, availableFaces);
+          if (lockedFace) {
+            setDrawState((current) => current ? { ...current, fromFace: lockedFace } : current);
+          }
+        }
+        return;
+      }
+
       if (e.key === "Delete" || e.key === "Backspace") {
         if (
           selectedIds.size === 0 && selectedStrutIds.size === 0 &&
@@ -813,12 +811,26 @@ export function Scene({
       }
 
       if (e.key.toLowerCase() === "p") {
-        if (selectedStrutIds.size < 3) return;
         e.preventDefault();
+        if (selectedStrutIds.size < 3) {
+          window.alert("Panels require at least three selected struts forming one closed loop.");
+          return;
+        }
         setSceneData((prev) => {
-          const panel = createPanelFromStruts(prev, [...selectedStrutIds]);
+          const strutIds = [...selectedStrutIds];
+          const validation = validatePanelPlacement(prev, strutIds);
+          if (!validation.valid) {
+            window.alert(validation.reason === "invalid-loop"
+              ? "The selected struts must form exactly one closed, unbranched loop."
+              : validation.reason === "invalid-brush"
+                ? "That closed loop does not form a valid panel surface."
+                : "Both sides of that panel loop already contain panels.");
+            return prev;
+          }
+
+          const panel = createPanelFromStruts(prev, strutIds);
           if (!panel) {
-            window.alert("Panels require one closed loop of at least three struts.");
+            window.alert("The panel could not be created from that loop.");
             return prev;
           }
 
@@ -828,11 +840,22 @@ export function Scene({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [activeTool, selectedIds, selectedPanelIds, selectedStrutIds, selectedWidgetIds]);
+  }, [
+    activeTool,
+    drawAxisLock,
+    drawState,
+    placeDrawStrutAtLength,
+    selectedIds,
+    selectedPanelIds,
+    selectedStrutIds,
+    selectedWidgetIds,
+    strutDrawMode,
+  ]);
 
   useEffect(() => {
     if (!drawState) {
       setHoverDrawLength(null);
+      setDrawAxisLock(null);
       return;
     }
 
@@ -843,6 +866,7 @@ export function Scene({
     setDrawState(null);
     setHoverDrawLength(null);
     setHoverCornerKey(null);
+    setDrawAxisLock(null);
   }, [strutDrawMode]);
 
   useEffect(() => {
@@ -882,6 +906,7 @@ export function Scene({
           highlightedLength={hoverDrawLength ?? VALID_STRUT_LENGTHS[0]}
           highlightedCornerKey={hoverCornerKey}
           strutDrawMode={strutDrawMode}
+          axisLock={drawAxisLock}
           onHoverLength={(length) => {
             setHoverDrawLength(length);
             setHoverCornerKey(null);
@@ -904,6 +929,14 @@ export function Scene({
           onContextMenu={handlePanelContextMenu}
         />
       ))}
+
+      {panelPreviewSide && selectedStrutIds.size >= 3 && (
+        <PanelPreviewMesh
+          sceneData={sceneData}
+          strutIds={[...selectedStrutIds]}
+          side={panelPreviewSide}
+        />
+      )}
 
       {Object.values(sceneData.widgets ?? {}).map((widget) => (
         <WidgetMesh
@@ -958,6 +991,7 @@ function DrawPreview({
   highlightedLength,
   highlightedCornerKey,
   strutDrawMode,
+  axisLock,
   onHoverLength,
   onHoverCorner,
   onPickLength,
@@ -968,6 +1002,7 @@ function DrawPreview({
   highlightedLength: number;
   highlightedCornerKey: string | null;
   strutDrawMode: StrutDrawMode;
+  axisLock: StructuralDrawAxis | null;
   onHoverLength: (length: number) => void;
   onHoverCorner: (key: string) => void;
   onPickLength: (length: number) => void;
@@ -983,9 +1018,38 @@ function DrawPreview({
   const straightSourceNodes = drawState.sourceNodeIds
     .map((nodeId) => sceneData.nodes[nodeId])
     .filter((node): node is NodeData => Boolean(node));
+  const feedbackTarget = strutDrawMode === "straight" && straightSourceNodes[0]
+    ? getStraightStrutTarget(straightSourceNodes[0], drawState.fromFace, highlightedLength)
+    : null;
+  const physicalLength = highlightedLength * (2 / 3);
 
   return (
     <group>
+      {feedbackTarget && (
+        <Html
+          position={[feedbackTarget.x, feedbackTarget.y + 0.85, feedbackTarget.z]}
+          center
+          style={{ pointerEvents: "none" }}
+        >
+          <div
+            style={{
+              padding: "5px 8px",
+              border: "1px solid #4ecca3",
+              borderRadius: 4,
+              background: "rgba(10, 25, 45, 0.9)",
+              color: "#d7fff4",
+              fontSize: 11,
+              fontFamily: "system-ui, sans-serif",
+              whiteSpace: "nowrap",
+              boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+            }}
+          >
+            {getStructuralDirectionLabel(drawState.fromFace)}
+            {axisLock ? " locked" : ""} · {highlightedLength} units · {physicalLength.toFixed(2)} m
+            {straightSourceNodes.length > 1 ? ` · ${straightSourceNodes.length} struts` : ""}
+          </div>
+        </Html>
+      )}
       {strutDrawMode === "straight" && straightSourceNodes.flatMap((straightSourceNode) =>
         VALID_STRUT_LENGTHS.map((len) => {
           const highlighted = len === highlightedLength;
@@ -1456,43 +1520,10 @@ function PanelMesh({
   onClick: (panelId: string, event: ThreeEvent<MouseEvent>) => void;
   onContextMenu: (panelId: string, event: ThreeEvent<MouseEvent>) => void;
 }) {
-  const geometry = useMemo(() => {
-    const hullStrip = getPanelHullStrip(sceneData, panel.strutIds, panel.side ?? "top");
-    if (hullStrip) {
-      const vertices = new Float32Array(hullStrip.points.flatMap((point) => [point.x, point.y, point.z]));
-      const nextGeometry = new THREE.BufferGeometry();
-      nextGeometry.setAttribute("position", new THREE.BufferAttribute(vertices, 3));
-      nextGeometry.setIndex(hullStrip.indices);
-      nextGeometry.computeVertexNormals();
-      return nextGeometry;
-    }
-
-    const points = getPanelBoundaryPoints(sceneData, panel.strutIds);
-    if (!points) return null;
-
-    const plane = getCoplanarPlane(points);
-    const hullNormal = plane ? null : getPolygonNormal(points);
-    if (!plane && !hullNormal) return null;
-    const panelNormal = plane?.normal ?? hullNormal!;
-    const panelPoints = offsetPlanePoints(
-      plane
-        ? insetCoplanarPolygon(points, panelNormal, strutWidth / 2)
-        : insetHullPolygon(points, panelNormal, strutWidth / 2),
-      panelNormal,
-      panel.side === "bottom" ? -strutWidth / 2 : strutWidth / 2,
-    );
-    if (panelPoints.length < 3) return null;
-
-    const vertices = new Float32Array(panelPoints.flatMap((point) => [point.x, point.y, point.z]));
-    const indices = triangulatePolygon(panelPoints, panelNormal);
-    if (!indices) return null;
-
-    const nextGeometry = new THREE.BufferGeometry();
-    nextGeometry.setAttribute("position", new THREE.BufferAttribute(vertices, 3));
-    nextGeometry.setIndex(panel.side === "bottom" ? reverseTriangleWinding(indices) : indices);
-    nextGeometry.computeVertexNormals();
-    return nextGeometry;
-  }, [panel.side, panel.strutIds, sceneData]);
+  const geometry = useMemo(
+    () => createPanelBufferGeometry(sceneData, panel.strutIds, panel.side ?? "top"),
+    [panel.side, panel.strutIds, sceneData],
+  );
 
   useEffect(() => () => geometry?.dispose(), [geometry]);
 
@@ -1519,12 +1550,55 @@ function PanelMesh({
   );
 }
 
-function reverseTriangleWinding(indices: number[]): number[] {
-  const reversed: number[] = [];
-  for (let index = 0; index < indices.length; index += 3) {
-    reversed.push(indices[index], indices[index + 2], indices[index + 1]);
-  }
-  return reversed;
+function PanelPreviewMesh({
+  sceneData,
+  strutIds,
+  side,
+}: {
+  sceneData: SceneData;
+  strutIds: string[];
+  side: "top" | "bottom";
+}) {
+  const geometry = useMemo(
+    () => createPanelBufferGeometry(sceneData, strutIds, side),
+    [sceneData, side, strutIds],
+  );
+  useEffect(() => () => geometry?.dispose(), [geometry]);
+  if (!geometry) return null;
+
+  return (
+    <mesh geometry={geometry} renderOrder={2} raycast={() => null}>
+      <meshStandardMaterial
+        color="#7de2c4"
+        transparent
+        opacity={0.42}
+        depthWrite={false}
+        side={THREE.DoubleSide}
+      />
+      <Edges color="#f4e285" threshold={10} />
+    </mesh>
+  );
+}
+
+function createPanelBufferGeometry(
+  sceneData: SceneData,
+  strutIds: string[],
+  side: "top" | "bottom",
+): THREE.BufferGeometry | null {
+  const brush = getPanelBrushGeometry(sceneData, strutIds, side);
+  if (!brush) return null;
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute(
+      brush.points.flatMap((point) => [point.x, point.y, point.z]),
+      3,
+    ),
+  );
+  geometry.setIndex(brush.indices);
+  geometry.computeVertexNormals();
+  return geometry;
 }
 
 function WidgetMesh({
@@ -1636,63 +1710,60 @@ function StrutMesh({
 }: StrutMeshProps) {
   const nodeA = sceneData.nodes[strut.nodeA];
   const nodeB = sceneData.nodes[strut.nodeB];
-  if (!nodeA || !nodeB) return null;
 
-  const halfWidth = strutWidth / 2;
-  const routePoints = getRuleStrutRoutePoints({
-    nodeA: nodeA.position,
-    faceA: strut.faceA,
-    nodeB: nodeB.position,
-    faceB: strut.faceB,
-    kind: strut.kind,
-  }).map(vec3ToThree);
-  const flatNormal = isCornerStrutKind(strut.kind)
-    ? vec3ToThree(getRuleCorner45PlaneNormal(strut.faceA, strut.faceB))
-    : undefined;
+  const geometry = useMemo(() => {
+    if (!nodeA || !nodeB) return null;
+    const route = getRuleStrutRoutePoints({
+      nodeA: nodeA.position,
+      faceA: strut.faceA,
+      nodeB: nodeB.position,
+      faceB: strut.faceB,
+      kind: strut.kind,
+    });
+    const flatNormal = isCornerStrutKind(strut.kind)
+      ? getRuleCorner45PlaneNormal(strut.faceA, strut.faceB)
+      : undefined;
+    const surface = createStrutSurface(route, strutWidth, flatNormal);
+    if (surface.vertices.length === 0) return null;
+
+    const nextGeometry = new THREE.BufferGeometry();
+    nextGeometry.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(
+        surface.vertices.flatMap((point) => [point.x, point.y, point.z]),
+        3,
+      ),
+    );
+    nextGeometry.setIndex(triangulateQuadSurface(surface));
+    nextGeometry.computeVertexNormals();
+    return nextGeometry;
+  }, [nodeA, nodeB, strut.faceA, strut.faceB, strut.kind]);
+
+  useEffect(() => () => geometry?.dispose(), [geometry]);
+
+  if (!nodeA || !nodeB || !geometry) return null;
+
+  const color = selected
+    ? "#e9a040"
+    : isCornerStrutKind(strut.kind)
+      ? SCENE_COLORS.planarCornerStrut
+      : SCENE_COLORS.straightStrut;
 
   return (
-    <group
+    <mesh
+      geometry={geometry}
+      castShadow
+      onClick={(event) => onClick(strut.id, event.point.clone(), event)}
+      onContextMenu={(event) => onContextMenu(strut.id, event)}
       onPointerOver={(event) => {
         event.stopPropagation();
         onHoverChange(true);
       }}
       onPointerOut={() => onHoverChange(false)}
     >
-      {routePoints.slice(0, -1).map((point, index) => (
-        <StrutSegmentMesh
-          key={index}
-          from={point}
-          to={routePoints[index + 1]}
-          halfWidth={halfWidth}
-          flatNormal={flatNormal}
-          color={selected
-            ? "#e9a040"
-            : isCornerStrutKind(strut.kind)
-              ? SCENE_COLORS.planarCornerStrut
-              : SCENE_COLORS.straightStrut}
-          hovered={hovered}
-          onClick={(event) => onClick(strut.id, event.point.clone(), event)}
-          onContextMenu={(event) => onContextMenu(strut.id, event)}
-        />
-      ))}
-      {isCornerStrutKind(strut.kind) && routePoints.slice(1, -1).map((point, index) => (
-        <CornerJointFill
-          key={`fill-${index}`}
-          position={point}
-          halfWidth={halfWidth}
-          flatNormal={flatNormal}
-          color={selected ? "#e9a040" : SCENE_COLORS.planarCornerStrut}
-          hovered={hovered}
-        />
-      ))}
-      {routePoints.map((point, index) => (
-        <mesh key={`joint-${index}`} position={point}>
-          <sphereGeometry args={[halfWidth, 8, 8]} />
-          <meshStandardMaterial color="#556677" flatShading={true} />
-          <HoverEdges visible={hovered} />
-        </mesh>
-      ))}
-    </group>
+      <meshStandardMaterial color={color} flatShading={true} />
+      <HoverEdges visible={hovered} />
+    </mesh>
   );
 }
 
@@ -1769,60 +1840,6 @@ function getJointFillQuaternion(flatNormal?: THREE.Vector3): THREE.Quaternion {
   return new THREE.Quaternion().setFromUnitVectors(
     new THREE.Vector3(0, 0, 1),
     flatNormal.clone().normalize(),
-  );
-}
-
-function StrutSegmentMesh({
-  from,
-  to,
-  halfWidth,
-  flatNormal,
-  color,
-  hovered,
-  onClick,
-  onContextMenu,
-}: {
-  from: THREE.Vector3;
-  to: THREE.Vector3;
-  halfWidth: number;
-  flatNormal?: THREE.Vector3;
-  color: string;
-  hovered: boolean;
-  onClick: (event: ThreeEvent<MouseEvent>) => void;
-  onContextMenu: (event: ThreeEvent<MouseEvent>) => void;
-}) {
-  const direction = new THREE.Vector3().subVectors(to, from);
-  const rawLength = direction.length();
-  if (rawLength < 0.01) return null;
-
-  const unitDirection = direction.normalize();
-  const midPoint = new THREE.Vector3().addVectors(from, to).multiplyScalar(0.5);
-  const length = Math.max(rawLength, 0.1);
-  const quaternion = getSegmentQuaternion(unitDirection, flatNormal);
-
-  return (
-    <>
-      <mesh
-        position={midPoint}
-        quaternion={quaternion}
-        castShadow
-        onClick={onClick}
-        onContextMenu={onContextMenu}
-      >
-        <boxGeometry args={[halfWidth * 2, length, halfWidth * 2]} />
-        <meshStandardMaterial color={color} flatShading={true} />
-        <HoverEdges visible={hovered} />
-      </mesh>
-      <mesh
-        position={midPoint}
-        quaternion={quaternion}
-        onClick={onClick}
-        onContextMenu={onContextMenu}
-      >
-        <boxGeometry args={[halfWidth * 2, length, halfWidth * 2]} />
-        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
-      </mesh>
-    </>
   );
 }
 

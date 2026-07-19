@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createRootScene, exportSceneObj } from "./document";
+import type { NodeData, SceneData, Vec3 } from "./types";
 
 describe("document geometry export", () => {
   it("writes axis-aligned node faces with outward winding", () => {
@@ -32,7 +33,49 @@ describe("document geometry export", () => {
       expect(dot(normal, center)).toBeGreaterThan(0);
     }
   });
+
+  it("removes internal node caps from a straight node-strut-node assembly", () => {
+    const scene: SceneData = {
+      nodes: {
+        a: node("a", { x: 0, y: 0, z: 0 }),
+        b: node("b", { x: 4, y: 0, z: 0 }),
+      },
+      struts: {
+        s: {
+          id: "s",
+          kind: "straight",
+          nodeA: "a",
+          faceA: "right",
+          nodeB: "b",
+          faceB: "left",
+          length: 3,
+        },
+      },
+      panels: {},
+      widgets: {},
+    };
+
+    const faces = exportSceneObj(scene).split("\n").filter((line) => line.startsWith("f "));
+
+    // Five exposed faces per node plus four uncapped sides on the strut.
+    expect(faces).toHaveLength(14);
+  });
 });
+
+function node(id: string, position: Vec3): NodeData {
+  return {
+    id,
+    position,
+    attachments: {
+      top: { occupied: false },
+      bottom: { occupied: false },
+      front: { occupied: false },
+      back: { occupied: false },
+      left: { occupied: false },
+      right: { occupied: false },
+    },
+  };
+}
 
 interface Point {
   x: number;

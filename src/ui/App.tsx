@@ -1,16 +1,23 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Viewport } from "./Viewport";
 import { Toolbar } from "./Toolbar";
 import type { StrutDrawMode, Tool } from "./types";
 import type { SceneData } from "../core/types";
 import type { WidgetKind } from "../core/types";
-import { normalizeSceneAttachments } from "../core/scene";
+import {
+  addPanelToScene,
+  createPanelFromStruts,
+  flipPanelInScene,
+  getPanelLoopThroughStrut,
+  normalizeSceneAttachments,
+} from "../core/scene";
 import { createRootScene, exportSceneJson, exportSceneObj } from "../core/document";
 import { WidgetPalette } from "./WidgetPalette";
 import { AppBar } from "./AppBar";
 import { exportSceneGltf } from "./exportGltf";
 import { CURRENT_SCENE_VERSION } from "../core/constants";
 import type { CameraMode } from "./camera";
+import { getPanelActionState } from "./panelActions";
 
 interface HistoryState {
   past: SceneData[];
@@ -26,6 +33,9 @@ export function App() {
   const [strutDrawMode, setStrutDrawMode] = useState<StrutDrawMode>("straight");
   const [cameraMode, setCameraMode] = useState<CameraMode>("perspective");
   const [followSelection, setFollowSelection] = useState(true);
+  const [selectedStrutIds, setSelectedStrutIds] = useState<Set<string>>(new Set());
+  const [selectedPanelIds, setSelectedPanelIds] = useState<Set<string>>(new Set());
+  const [panelPreviewSide, setPanelPreviewSide] = useState<"top" | "bottom" | null>(null);
   const [history, setHistory] = useState<HistoryState>(() => ({
     past: [],
     present: createRootScene(),
@@ -62,7 +72,39 @@ export function App() {
       present: normalizeSceneAttachments(scene),
       future: [],
     });
+    setSelectedStrutIds(new Set());
+    setSelectedPanelIds(new Set());
+    setPanelPreviewSide(null);
   }, []);
+
+  const selectedStrutIdList = useMemo(() => [...selectedStrutIds], [selectedStrutIds]);
+  const panelActionState = useMemo(
+    () => getPanelActionState(sceneData, selectedStrutIdList),
+    [sceneData, selectedStrutIdList],
+  );
+
+  const addSelectedPanel = useCallback((side: "top" | "bottom") => {
+    setPanelPreviewSide(null);
+    setSceneData((scene) => {
+      const panel = createPanelFromStruts(scene, selectedStrutIdList, side);
+      return panel ? addPanelToScene(scene, panel) : scene;
+    });
+  }, [selectedStrutIdList, setSceneData]);
+
+  const selectCompleteLoop = useCallback(() => {
+    const strutId = selectedStrutIdList.length === 1 ? selectedStrutIdList[0] : null;
+    if (!strutId) return;
+    const loop = getPanelLoopThroughStrut(sceneData, strutId);
+    if (loop) setSelectedStrutIds(new Set(loop));
+  }, [sceneData, selectedStrutIdList]);
+
+  const flipSelectedPanels = useCallback(() => {
+    setSceneData((scene) => {
+      let result = scene;
+      for (const panelId of selectedPanelIds) result = flipPanelInScene(result, panelId);
+      return result;
+    });
+  }, [selectedPanelIds, setSceneData]);
 
   const undo = useCallback(() => {
     setHistory((current) => {
@@ -313,6 +355,16 @@ export function App() {
         onToggleCameraMode={() => setCameraMode((current) =>
           current === "perspective" ? "orthographic" : "perspective")}
         onToggleFollowSelection={() => setFollowSelection((current) => !current)}
+        panelSelectionStatus={panelActionState.status}
+        canAddOuter={panelActionState.canAddOuter}
+        canAddInner={panelActionState.canAddInner}
+        selectedPanelCount={selectedPanelIds.size}
+        onAddOuter={() => addSelectedPanel("top")}
+        onAddInner={() => addSelectedPanel("bottom")}
+        onFlipPanels={flipSelectedPanels}
+        canSelectLoop={panelActionState.canSelectLoop}
+        onSelectLoop={selectCompleteLoop}
+        onPreviewPanel={setPanelPreviewSide}
       />
       <div style={{ display: "flex", flex: 1, minHeight: 0, position: "relative" }}>
         <Viewport
@@ -324,6 +376,11 @@ export function App() {
           cameraMode={cameraMode}
           followSelection={followSelection}
           onCameraModeChange={setCameraMode}
+          selectedStrutIds={selectedStrutIds}
+          setSelectedStrutIds={setSelectedStrutIds}
+          selectedPanelIds={selectedPanelIds}
+          setSelectedPanelIds={setSelectedPanelIds}
+          panelPreviewSide={panelPreviewSide}
         />
         <div
           style={{

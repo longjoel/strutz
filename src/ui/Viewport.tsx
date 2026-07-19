@@ -26,6 +26,11 @@ interface ViewportProps {
   cameraMode: CameraMode;
   followSelection: boolean;
   onCameraModeChange: (mode: CameraMode) => void;
+  selectedStrutIds: Set<string>;
+  setSelectedStrutIds: Dispatch<SetStateAction<Set<string>>>;
+  selectedPanelIds: Set<string>;
+  setSelectedPanelIds: Dispatch<SetStateAction<Set<string>>>;
+  panelPreviewSide: "top" | "bottom" | null;
 }
 
 export function Viewport({
@@ -37,6 +42,11 @@ export function Viewport({
   cameraMode,
   followSelection,
   onCameraModeChange,
+  selectedStrutIds,
+  setSelectedStrutIds,
+  selectedPanelIds,
+  setSelectedPanelIds,
+  panelPreviewSide,
 }: ViewportProps) {
   const [perspectiveCamera, setPerspectiveCamera] = useState<THREE.PerspectiveCamera | null>(null);
   const [orthographicCamera, setOrthographicCamera] = useState<THREE.OrthographicCamera | null>(null);
@@ -148,6 +158,11 @@ export function Viewport({
           sceneData={sceneData}
           setSceneData={setSceneData}
           onFocusPoint={focusCamera}
+          selectedStrutIds={selectedStrutIds}
+          setSelectedStrutIds={setSelectedStrutIds}
+          selectedPanelIds={selectedPanelIds}
+          setSelectedPanelIds={setSelectedPanelIds}
+          panelPreviewSide={panelPreviewSide}
         />
 
         <OrbitControls

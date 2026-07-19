@@ -25,6 +25,8 @@ export type StrutPlacementIssue =
   | "faces-not-opposite"
   | "not-axis-aligned"
   | "invalid-length"
+  | "node-intersection"
+  | "strut-intersection"
   | "invalid-corner-footprint";
 
 export type WidgetPlacementIssue = "missing-node" | "occupied-face";
@@ -35,6 +37,28 @@ export interface StrutConnection {
   nodeB: string;
   faceB: FaceName;
   kind?: StrutKind;
+}
+
+export interface PlannedStraightRunNode {
+  position: Vec3;
+  existingNodeId?: string;
+}
+
+export interface PlannedStraightRunSegment {
+  fromIndex: number;
+  toIndex: number;
+  length: number;
+}
+
+export interface StraightRunPlan {
+  nodes: PlannedStraightRunNode[];
+  segments: PlannedStraightRunSegment[];
+}
+
+export interface StraightStrutConflict {
+  strutId: string;
+  kind: "crossing" | "overlap";
+  position?: Vec3;
 }
 
 /** Validate one node center against the grid and all other node volumes. */
@@ -101,9 +125,15 @@ export function validateStrutPlacement(
   if (!isAlongFaceAxis(attachmentDelta, faceA)) {
     return { valid: false, reason: "not-axis-aligned" };
   }
-  return isValidStrutLength(length(attachmentDelta))
-    ? { valid: true }
-    : { valid: false, reason: "invalid-length" };
+  if (!isValidStrutLength(length(attachmentDelta))) {
+    return { valid: false, reason: "invalid-length" };
+  }
+  if (getInteriorNodesOnAxis(scene, endpointA, endpointB.position, faceA).length > 0) {
+    return { valid: false, reason: "node-intersection" };
+  }
+  return findStraightStrutConflicts(scene, endpointA.position, endpointB.position, faceA).length > 0
+    ? { valid: false, reason: "strut-intersection" }
+    : { valid: true };
 }
 
 export function validateWidgetPlacement(
@@ -130,6 +160,125 @@ export function getStraightStrutTarget(
     y: sourceNode.position.y + normal.y * spacing,
     z: sourceNode.position.z + normal.z * spacing,
   });
+}
+
+/**
+ * Plan a straight run before mutation. Existing nodes inside the requested span
+ * become chain joints, and any remaining gaps are decomposed into catalog sizes.
+ */
+export function planStraightStrutRun(
+  scene: SceneData,
+  sourceNodeId: string,
+  fromFace: FaceName,
+  strutLength: number,
+): StraightRunPlan | null {
+  const source = scene.nodes[sourceNodeId];
+  if (!source || source.attachments[fromFace]?.occupied) return null;
+
+  const normal = faceNormal(fromFace);
+  const targetPosition = getStraightStrutTarget(source, fromFace, strutLength);
+  const targetDistance = centerSpacingForStrutLength(strutLength);
+  const existingAnchors = getInteriorNodesOnAxis(scene, source, targetPosition, fromFace)
+    .map((node) => ({
+      distance: distanceAlong(node.position, source.position, normal),
+      position: node.position,
+      existingNodeId: node.id,
+    }))
+    .sort((a, b) => a.distance - b.distance);
+  const existingTarget = Object.values(scene.nodes).find((node) =>
+    samePosition(node.position, targetPosition));
+  const anchors = [
+    ...existingAnchors,
+    {
+      distance: targetDistance,
+      position: targetPosition,
+      existingNodeId: existingTarget?.id,
+    },
+  ];
+
+  const nodes: PlannedStraightRunNode[] = [
+    { position: source.position, existingNodeId: source.id },
+  ];
+  const segments: PlannedStraightRunSegment[] = [];
+  let previousDistance = 0;
+  let previousIndex = 0;
+
+  for (const anchor of anchors) {
+    const clearRun = Math.round((anchor.distance - previousDistance - nodeSize) * 1000) / 1000;
+    const parts = decomposeStrutRun(clearRun);
+    if (!parts || parts.length === 0) return null;
+
+    let cursor = previousDistance;
+    for (let partIndex = 0; partIndex < parts.length; partIndex += 1) {
+      const part = parts[partIndex];
+      cursor += part + nodeSize;
+      const isAnchor = partIndex === parts.length - 1;
+      const position = isAnchor
+        ? anchor.position
+        : {
+            x: source.position.x + normal.x * cursor,
+            y: source.position.y + normal.y * cursor,
+            z: source.position.z + normal.z * cursor,
+          };
+      const nodeIndex = nodes.length;
+      nodes.push({
+        position,
+        existingNodeId: isAnchor ? anchor.existingNodeId : undefined,
+      });
+      segments.push({ fromIndex: previousIndex, toIndex: nodeIndex, length: part });
+      previousIndex = nodeIndex;
+    }
+    previousDistance = anchor.distance;
+  }
+
+  return segments.length > 0 ? { nodes, segments } : null;
+}
+
+/** Find existing straight struts whose volumes cross or overlap a proposed run. */
+export function findStraightStrutConflicts(
+  scene: SceneData,
+  sourcePosition: Vec3,
+  targetPosition: Vec3,
+  fromFace: FaceName,
+): StraightStrutConflict[] {
+  const proposedAxis = faceAxis(fromFace);
+  const conflicts: StraightStrutConflict[] = [];
+
+  for (const strut of Object.values(scene.struts)) {
+    if (isCornerStrutKind(strut.kind)) continue;
+    const nodeA = scene.nodes[strut.nodeA];
+    const nodeB = scene.nodes[strut.nodeB];
+    if (!nodeA || !nodeB) continue;
+
+    const existingAxis = faceAxis(strut.faceA);
+    if (existingAxis === proposedAxis) {
+      if (
+        sameAxisLine(sourcePosition, nodeA.position, proposedAxis) &&
+        axisIntervalsOverlap(sourcePosition, targetPosition, nodeA.position, nodeB.position, proposedAxis)
+      ) {
+        conflicts.push({ strutId: strut.id, kind: "overlap" });
+      }
+      continue;
+    }
+
+    const thirdAxis = (["x", "y", "z"] as const).find((axis) =>
+      axis !== proposedAxis && axis !== existingAxis);
+    if (!thirdAxis || !approximatelyEqual(sourcePosition[thirdAxis], nodeA.position[thirdAxis])) {
+      continue;
+    }
+
+    const position = { ...sourcePosition };
+    position[proposedAxis] = nodeA.position[proposedAxis];
+    position[existingAxis] = sourcePosition[existingAxis];
+    if (
+      isOnAxisSegment(position, sourcePosition, targetPosition, proposedAxis, true) &&
+      isOnAxisSegment(position, nodeA.position, nodeB.position, existingAxis, false)
+    ) {
+      conflicts.push({ strutId: strut.id, kind: "crossing", position });
+    }
+  }
+
+  return conflicts;
 }
 
 export function getNearestStrutLength(
@@ -204,6 +353,68 @@ function nodesContact(a: Vec3, b: Vec3): boolean {
   return Math.abs(a.x - b.x) < nodeSize + 0.01 &&
     Math.abs(a.y - b.y) < nodeSize + 0.01 &&
     Math.abs(a.z - b.z) < nodeSize + 0.01;
+}
+
+function getInteriorNodesOnAxis(
+  scene: SceneData,
+  source: NodeData,
+  targetPosition: Vec3,
+  fromFace: FaceName,
+): NodeData[] {
+  const normal = faceNormal(fromFace);
+  const targetDistance = distanceAlong(targetPosition, source.position, normal);
+  const axis = faceAxis(fromFace);
+  return Object.values(scene.nodes).filter((node) => {
+    if (node.id === source.id || samePosition(node.position, targetPosition)) return false;
+    const distance = distanceAlong(node.position, source.position, normal);
+    if (distance <= 0 || distance >= targetDistance) return false;
+    return (["x", "y", "z"] as const).every((candidate) =>
+      candidate === axis || Math.abs(node.position[candidate] - source.position[candidate]) < nodeSize - 0.01);
+  });
+}
+
+function distanceAlong(position: Vec3, origin: Vec3, normal: Vec3): number {
+  return (position.x - origin.x) * normal.x +
+    (position.y - origin.y) * normal.y +
+    (position.z - origin.z) * normal.z;
+}
+
+function samePosition(a: Vec3, b: Vec3): boolean {
+  return approximatelyEqual(a.x, b.x) &&
+    approximatelyEqual(a.y, b.y) &&
+    approximatelyEqual(a.z, b.z);
+}
+
+function sameAxisLine(a: Vec3, b: Vec3, axis: "x" | "y" | "z"): boolean {
+  return (["x", "y", "z"] as const).every((candidate) =>
+    candidate === axis || approximatelyEqual(a[candidate], b[candidate]));
+}
+
+function axisIntervalsOverlap(
+  aStart: Vec3,
+  aEnd: Vec3,
+  bStart: Vec3,
+  bEnd: Vec3,
+  axis: "x" | "y" | "z",
+): boolean {
+  const start = Math.max(Math.min(aStart[axis], aEnd[axis]), Math.min(bStart[axis], bEnd[axis]));
+  const end = Math.min(Math.max(aStart[axis], aEnd[axis]), Math.max(bStart[axis], bEnd[axis]));
+  return end - start > 0.01;
+}
+
+function isOnAxisSegment(
+  point: Vec3,
+  start: Vec3,
+  end: Vec3,
+  axis: "x" | "y" | "z",
+  includeEnds: boolean,
+): boolean {
+  if (!sameAxisLine(point, start, axis)) return false;
+  const low = Math.min(start[axis], end[axis]);
+  const high = Math.max(start[axis], end[axis]);
+  return includeEnds
+    ? point[axis] >= low - 0.01 && point[axis] <= high + 0.01
+    : point[axis] > low + 0.01 && point[axis] < high - 0.01;
 }
 
 function isOnGrid(value: number): boolean {

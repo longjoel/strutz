@@ -3,6 +3,7 @@ import {
   decomposeStrutRun,
   getCorner45ConnectionFaces,
   getNearestStrutLength,
+  planStraightStrutRun,
   getStraightConnectionFaces,
   getStraightStrutTarget,
   validateNodePlacement,
@@ -10,6 +11,7 @@ import {
   validateWidgetPlacement,
 } from "./placement";
 import type { Attachments, NodeData, SceneData } from "./types";
+import { addStraightStrutRunsToScene, addStrutToScene } from "./scene";
 
 describe("placement rules", () => {
   it("requires node centers on the unit grid with no touching node volumes", () => {
@@ -58,6 +60,120 @@ describe("placement rules", () => {
     expect(validateStrutPlacement(scene, {
       nodeA: "a", faceA: "top", nodeB: "b", faceB: "bottom",
     })).toEqual({ valid: false, reason: "not-axis-aligned" });
+  });
+
+  it("splits a length-7 run around an existing intersecting node", () => {
+    const scene = makeScene(
+      node("source", { x: 0, y: 0, z: 0 }),
+      node("middle", { x: 4, y: 0, z: 0 }),
+      node("target", { x: 8, y: 0, z: 0 }),
+    );
+
+    expect(validateStrutPlacement(scene, {
+      nodeA: "source",
+      faceA: "right",
+      nodeB: "target",
+      faceB: "left",
+    })).toEqual({ valid: false, reason: "node-intersection" });
+
+    expect(planStraightStrutRun(scene, "source", "right", 7)).toEqual({
+      nodes: [
+        { position: { x: 0, y: 0, z: 0 }, existingNodeId: "source" },
+        { position: { x: 4, y: 0, z: 0 }, existingNodeId: "middle" },
+        { position: { x: 8, y: 0, z: 0 }, existingNodeId: "target" },
+      ],
+      segments: [
+        { fromIndex: 0, toIndex: 1, length: 3 },
+        { fromIndex: 1, toIndex: 2, length: 3 },
+      ],
+    });
+  });
+
+  it("atomically places the split run instead of overlapping the middle node", () => {
+    const original = makeScene(
+      node("source", { x: 0, y: 0, z: 0 }),
+      node("middle", { x: 4, y: 0, z: 0 }),
+    );
+
+    const result = addStraightStrutRunsToScene(original, ["source"], "right", 7);
+
+    expect(Object.values(result.nodes).map((value) => value.position)).toContainEqual({ x: 8, y: 0, z: 0 });
+    expect(Object.values(result.struts).map((strut) => strut.length).sort()).toEqual([3, 3]);
+    expect(result.nodes.middle.attachments.left.occupied).toBe(true);
+    expect(result.nodes.middle.attachments.right.occupied).toBe(true);
+  });
+
+  it("inserts a shared node and subdivides both perpendicular length-7 runs", () => {
+    const base = makeScene(
+      node("north", { x: 0, y: 0, z: 4 }),
+      node("south", { x: 0, y: 0, z: -4 }),
+      node("east", { x: 4, y: 0, z: 0 }),
+      node("west", { x: -4, y: 0, z: 0 }),
+    );
+    const withExistingRun = addStrutToScene(base, {
+      id: "north-south",
+      nodeA: "north",
+      faceA: "back",
+      nodeB: "south",
+      faceB: "front",
+      length: 7,
+    });
+
+    expect(validateStrutPlacement(withExistingRun, {
+      nodeA: "east",
+      faceA: "left",
+      nodeB: "west",
+      faceB: "right",
+    })).toEqual({ valid: false, reason: "strut-intersection" });
+
+    const result = addStraightStrutRunsToScene(withExistingRun, ["east"], "left", 7);
+    const crossingNode = Object.values(result.nodes).find((value) =>
+      value.position.x === 0 && value.position.y === 0 && value.position.z === 0);
+
+    expect(crossingNode).toBeDefined();
+    expect(Object.values(result.struts).map((strut) => strut.length).sort()).toEqual([3, 3, 3, 3]);
+    expect(crossingNode?.attachments.front.occupied).toBe(true);
+    expect(crossingNode?.attachments.back.occupied).toBe(true);
+    expect(crossingNode?.attachments.left.occupied).toBe(true);
+    expect(crossingNode?.attachments.right.occupied).toBe(true);
+  });
+
+  it("rejects collinear strut overlap atomically", () => {
+    const base = makeScene(
+      node("existing-start", { x: 0, y: 0, z: 0 }),
+      node("existing-end", { x: 8, y: 0, z: 0 }),
+      node("new-start", { x: -4, y: 0, z: 0 }),
+    );
+    const withExistingRun = addStrutToScene(base, {
+      id: "existing",
+      nodeA: "existing-start",
+      faceA: "right",
+      nodeB: "existing-end",
+      faceB: "left",
+      length: 7,
+    });
+
+    expect(addStraightStrutRunsToScene(withExistingRun, ["new-start"], "right", 7))
+      .toBe(withExistingRun);
+  });
+
+  it("rejects a crossing when either resulting clear span is not decomposable", () => {
+    const base = makeScene(
+      node("north", { x: 1, y: 0, z: 4 }),
+      node("south", { x: 1, y: 0, z: -4 }),
+      node("east", { x: 4, y: 0, z: 0 }),
+    );
+    const withExistingRun = addStrutToScene(base, {
+      id: "offset-crossing",
+      nodeA: "north",
+      faceA: "back",
+      nodeB: "south",
+      faceB: "front",
+      length: 7,
+    });
+
+    expect(addStraightStrutRunsToScene(withExistingRun, ["east"], "left", 7))
+      .toBe(withExistingRun);
   });
 
   it("accepts a planar corner whose two runs use different catalog lengths", () => {

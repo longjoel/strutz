@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import { createNode } from "../core/scene";
 import { getStraightStrutTarget } from "../core/placement";
-import { getNearestStructuralDrawCandidate } from "./structuralDraw";
+import {
+  getFaceForAxisLock,
+  getNearestStructuralDrawCandidate,
+  getStructuralDirectionLabel,
+  getStructuralDrawShortcut,
+} from "./structuralDraw";
 
 describe("structural strut pointer inference", () => {
   it("infers axis, direction, and length from a projected mouse position", () => {
@@ -33,5 +38,19 @@ describe("structural strut pointer inference", () => {
     const pointer = new THREE.Vector2(0.4, 0);
     expect(getNearestStructuralDrawCandidate(source, camera, pointer, ["left", "right"])?.face).toBe("right");
     expect(getNearestStructuralDrawCandidate(source, camera, pointer, [])).toBeNull();
+  });
+
+  it("resolves active-draw axis and catalog-length shortcuts", () => {
+    expect(getStructuralDrawShortcut("x")).toEqual({ kind: "axis", axis: "x" });
+    expect(getStructuralDrawShortcut("Z")).toEqual({ kind: "axis", axis: "z" });
+    expect(getStructuralDrawShortcut("3")).toEqual({ kind: "length", length: 3 });
+    expect(getStructuralDrawShortcut("2")).toBeNull();
+  });
+
+  it("keeps the current direction when locking its axis and falls back to a free direction", () => {
+    expect(getFaceForAxisLock("x", "left", ["left", "right"])).toBe("left");
+    expect(getFaceForAxisLock("y", "left", ["bottom"])).toBe("bottom");
+    expect(getFaceForAxisLock("z", "front", [])).toBeNull();
+    expect(getStructuralDirectionLabel("back")).toBe("Z−");
   });
 });

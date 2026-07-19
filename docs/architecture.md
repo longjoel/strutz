@@ -9,6 +9,7 @@ The findings and recommended follow-up order from the first cleanup pass are in 
 - `src/core/types.ts`: serialized scene schema and domain names.
 - `src/core/constants.ts`: the construction catalog. New grid, node, or strut size families start here.
 - `src/core/rules.ts`: vector math and geometry calculations with no scene mutation.
+- `src/core/brush.ts`: renderer-independent half-space clipping and panel brush geometry.
 - `src/core/placement.ts`: renderer-independent placement decisions and reasoned validation results.
 - `src/core/scene.ts`: immutable scene mutations, attachment normalization, panel topology, and cascade deletion.
 - `src/core/document.ts`: scene creation and text/OBJ serialization.
@@ -29,7 +30,9 @@ For a new construction feature:
 6. Add UI gestures and rendering last, consuming the core API instead of repeating its math.
 7. Update `docs/construction-rules.md` when an invariant changes.
 
-`Scene.tsx` still owns many interaction and mesh concerns and is the primary remaining maintainability hotspot. Future feature work should extract cohesive slices (selection, dragging, mesh rendering, and draw-session state) rather than adding more top-level behavior to that file.
+`Scene.tsx` still owns many interaction and mesh concerns and is the primary remaining maintainability hotspot. Strut and panel selection are now lifted to the application boundary for contextual commands; future work should continue extracting node/widget selection, mesh rendering, and draw-session state.
+
+Contextual panel command availability lives in `src/ui/panelActions.ts`. Loop discovery and validation remain in the core so selection gestures and alternate clients can share identical topology rules.
 
 ## Known follow-up work
 

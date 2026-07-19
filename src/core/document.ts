@@ -1,25 +1,17 @@
 import { CURRENT_SCENE_VERSION, nodeSize, strutWidth } from "./constants";
-import { createNode, getPanelBoundaryPoints, getPanelHullStrip } from "./scene";
+import { createNode, getPanelBrushGeometry } from "./scene";
 import {
   cross,
-  dot,
   faceNormal,
   getAttachmentPosition,
   getCorner45PlaneNormal,
-  getCoplanarPlane,
-  getPolygonNormal,
   getStrutRoutePoints,
   isCornerStrutKind,
-  insetCoplanarPolygon,
-  insetHullPolygon,
-  length,
   normalize,
-  offsetPlanePoints,
   scale,
-  sub,
-  triangulatePolygon,
 } from "./rules";
 import type { FaceName, SceneData, Vec3, WidgetData } from "./types";
+import { createBoxSurface, createStrutSurface, type QuadSurface } from "./geometry";
 
 export function createRootScene(): SceneData {
   const root = createNode({ x: 0, y: 0, z: 0 });
@@ -40,9 +32,17 @@ export function exportSceneObj(scene: SceneData): string {
   const builder = new ObjBuilder();
   builder.comment("Strutz OBJ export");
 
+  const connectedFaces = getConnectedStrutFaces(scene);
+
   for (const node of Object.values(scene.nodes)) {
     builder.object(`node_${node.id}`);
-    builder.addAxisAlignedBox(node.position, nodeSize, nodeSize, nodeSize);
+    builder.addAxisAlignedBox(
+      node.position,
+      nodeSize,
+      nodeSize,
+      nodeSize,
+      connectedFaces.get(node.id),
+    );
   }
 
   for (const strut of Object.values(scene.struts)) {
@@ -61,50 +61,14 @@ export function exportSceneObj(scene: SceneData): string {
     const flatNormal = isCornerStrutKind(strut.kind)
       ? getCorner45PlaneNormal(strut.faceA, strut.faceB)
       : undefined;
-    for (let i = 0; i < route.length - 1; i += 1) {
-      builder.addSegmentBox(route[i], route[i + 1], strutWidth, flatNormal);
-    }
-
-    if (isCornerStrutKind(strut.kind)) {
-      for (let i = 1; i < route.length - 1; i += 1) {
-        builder.addAxisAlignedBox(route[i], strutWidth, strutWidth, strutWidth);
-      }
-    }
+    builder.addQuadSurface(createStrutSurface(route, strutWidth, flatNormal));
   }
 
   for (const panel of Object.values(scene.panels ?? {})) {
-    const hullStrip = getPanelHullStrip(scene, panel.strutIds, panel.side ?? "top");
-    if (hullStrip) {
-      builder.object(`panel_${panel.id}`);
-      builder.addTriangleMesh(hullStrip.points, hullStrip.indices);
-      continue;
-    }
-
-    const points = getPanelBoundaryPoints(scene, panel.strutIds);
-    if (!points) continue;
-    const plane = getCoplanarPlane(points);
-
+    const brush = getPanelBrushGeometry(scene, panel.strutIds, panel.side ?? "top");
+    if (!brush) continue;
     builder.object(`panel_${panel.id}`);
-    const hullNormal = plane ? null : getPolygonNormal(points);
-    if (plane || hullNormal) {
-      const panelNormal = plane?.normal ?? hullNormal!;
-      const panelPoints = offsetPlanePoints(
-        plane
-          ? insetCoplanarPolygon(points, panelNormal, strutWidth / 2)
-          : insetHullPolygon(points, panelNormal, strutWidth / 2),
-        panelNormal,
-        panel.side === "bottom" ? -strutWidth / 2 : strutWidth / 2,
-      );
-      if (panelPoints.length < 3) continue;
-      const indices = triangulatePolygon(panelPoints, panelNormal);
-      if (!indices) continue;
-      builder.addTriangleMesh(
-        panelPoints,
-        panel.side === "bottom" ? reverseTriangleWinding(indices) : indices,
-      );
-    } else {
-      builder.addHullFace(points, panel.side === "bottom");
-    }
+    builder.addTriangleMesh(brush.points, brush.indices);
   }
 
   for (const widget of Object.values(scene.widgets ?? {})) {
@@ -118,12 +82,24 @@ export function exportSceneObj(scene: SceneData): string {
   return builder.toString();
 }
 
-function reverseTriangleWinding(indices: number[]): number[] {
-  const reversed: number[] = [];
-  for (let index = 0; index < indices.length; index += 3) {
-    reversed.push(indices[index], indices[index + 2], indices[index + 1]);
+function getConnectedStrutFaces(scene: SceneData): Map<string, Set<FaceName>> {
+  const facesByNode = new Map<string, Set<FaceName>>();
+  for (const strut of Object.values(scene.struts)) {
+    if (!scene.nodes[strut.nodeA] || !scene.nodes[strut.nodeB]) continue;
+    addConnectedFace(facesByNode, strut.nodeA, strut.faceA);
+    addConnectedFace(facesByNode, strut.nodeB, strut.faceB);
   }
-  return reversed;
+  return facesByNode;
+}
+
+function addConnectedFace(
+  facesByNode: Map<string, Set<FaceName>>,
+  nodeId: string,
+  face: FaceName,
+): void {
+  const faces = facesByNode.get(nodeId) ?? new Set<FaceName>();
+  faces.add(face);
+  facesByNode.set(nodeId, faces);
 }
 
 class ObjBuilder {
@@ -138,48 +114,25 @@ class ObjBuilder {
     this.lines.push(`o ${sanitizeObjName(name)}`);
   }
 
-  addAxisAlignedBox(center: Vec3, sx: number, sy: number, sz: number) {
-    const hx = sx / 2;
-    const hy = sy / 2;
-    const hz = sz / 2;
-    this.addBoxVertices([
-      { x: center.x - hx, y: center.y - hy, z: center.z - hz },
-      { x: center.x + hx, y: center.y - hy, z: center.z - hz },
-      { x: center.x + hx, y: center.y + hy, z: center.z - hz },
-      { x: center.x - hx, y: center.y + hy, z: center.z - hz },
-      { x: center.x - hx, y: center.y - hy, z: center.z + hz },
-      { x: center.x + hx, y: center.y - hy, z: center.z + hz },
-      { x: center.x + hx, y: center.y + hy, z: center.z + hz },
-      { x: center.x - hx, y: center.y + hy, z: center.z + hz },
-    ], true);
+  addAxisAlignedBox(
+    center: Vec3,
+    sx: number,
+    sy: number,
+    sz: number,
+    omittedFaces: ReadonlySet<FaceName> = new Set(),
+  ) {
+    this.addQuadSurface(createBoxSurface(center, sx, sy, sz, omittedFaces));
   }
 
-  addSegmentBox(
-    from: Vec3,
-    to: Vec3,
-    width: number,
-    flatNormal?: Vec3,
-  ) {
-    const dir = normalize(sub(to, from));
-    if (length(dir) < 0.01) return;
-
-    const reference = getSegmentReference(dir, flatNormal);
-    const right = normalize(cross(dir, reference));
-    const up = normalize(cross(right, dir));
-    const half = width / 2;
-    const r = scale(right, half);
-    const u = scale(up, half);
-
-    this.addBoxVertices([
-      add(add(from, scale(r, -1)), scale(u, -1)),
-      add(add(from, r), scale(u, -1)),
-      add(add(from, r), u),
-      add(add(from, scale(r, -1)), u),
-      add(add(to, scale(r, -1)), scale(u, -1)),
-      add(add(to, r), scale(u, -1)),
-      add(add(to, r), u),
-      add(add(to, scale(r, -1)), u),
-    ]);
+  addQuadSurface(surface: QuadSurface) {
+    const start = this.vertexOffset;
+    for (const vertex of surface.vertices) {
+      this.lines.push(`v ${formatNumber(vertex.x)} ${formatNumber(vertex.y)} ${formatNumber(vertex.z)}`);
+    }
+    for (const quad of surface.quads) {
+      this.lines.push(`f ${quad.map((index) => start + index).join(" ")}`);
+    }
+    this.vertexOffset += surface.vertices.length;
   }
 
   addOrientedBox(center: Vec3, xAxis: Vec3, yAxis: Vec3, zAxis: Vec3, sx: number, sy: number, sz: number) {
@@ -191,25 +144,6 @@ class ObjBuilder {
       point(-1, -1, -1), point(1, -1, -1), point(1, 1, -1), point(-1, 1, -1),
       point(-1, -1, 1), point(1, -1, 1), point(1, 1, 1), point(-1, 1, 1),
     ]);
-  }
-
-  addHullFace(boundary: Vec3[], reverse = false) {
-    if (boundary.length < 3) return;
-    const center = scale(
-      boundary.reduce((sum, point) => add(sum, point), { x: 0, y: 0, z: 0 }),
-      1 / boundary.length,
-    );
-    const start = this.vertexOffset;
-    this.lines.push(`v ${formatNumber(center.x)} ${formatNumber(center.y)} ${formatNumber(center.z)}`);
-    for (const point of boundary) {
-      this.lines.push(`v ${formatNumber(point.x)} ${formatNumber(point.y)} ${formatNumber(point.z)}`);
-    }
-    for (let index = 0; index < boundary.length; index += 1) {
-      const current = start + 1 + index;
-      const next = start + 1 + ((index + 1) % boundary.length);
-      this.lines.push(reverse ? `f ${start} ${next} ${current}` : `f ${start} ${current} ${next}`);
-    }
-    this.vertexOffset += boundary.length + 1;
   }
 
   addTriangleMesh(vertices: Vec3[], indices: number[]) {
@@ -286,14 +220,6 @@ function getWidgetAxes(face: FaceName, rotation: number): { x: Vec3; y: Vec3; z:
     y,
     z: add(scale(baseZ, cos), scale(baseX, -sin)),
   };
-}
-
-function getSegmentReference(dir: Vec3, flatNormal?: Vec3): Vec3 {
-  if (flatNormal && length(flatNormal) > 0.0001 && Math.abs(dot(dir, flatNormal)) < 0.999) {
-    return flatNormal;
-  }
-
-  return Math.abs(dir.y) > 0.95 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
 }
 
 function add(a: Vec3, b: Vec3): Vec3 {

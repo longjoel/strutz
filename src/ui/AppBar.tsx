@@ -12,6 +12,16 @@ export function AppBar({
   followSelection,
   onToggleCameraMode,
   onToggleFollowSelection,
+  panelSelectionStatus,
+  canAddOuter,
+  canAddInner,
+  selectedPanelCount,
+  onAddOuter,
+  onAddInner,
+  onFlipPanels,
+  canSelectLoop,
+  onSelectLoop,
+  onPreviewPanel,
 }: {
   fileName: string;
   scene: SceneData;
@@ -23,6 +33,16 @@ export function AppBar({
   followSelection: boolean;
   onToggleCameraMode: () => void;
   onToggleFollowSelection: () => void;
+  panelSelectionStatus: string | null;
+  canAddOuter: boolean;
+  canAddInner: boolean;
+  selectedPanelCount: number;
+  onAddOuter: () => void;
+  onAddInner: () => void;
+  onFlipPanels: () => void;
+  canSelectLoop: boolean;
+  onSelectLoop: () => void;
+  onPreviewPanel: (side: "top" | "bottom" | null) => void;
 }) {
   const stats = [
     ["Nodes", Object.keys(scene.nodes).length],
@@ -78,6 +98,45 @@ export function AppBar({
           active={followSelection}
           onClick={onToggleFollowSelection}
         />
+        {(panelSelectionStatus || selectedPanelCount > 0) && (
+          <div style={{ height: 18, width: 1, margin: "0 3px", background: "#254368" }} />
+        )}
+        {panelSelectionStatus && (
+          <>
+            <span
+              title={panelSelectionStatus}
+              style={{ color: canAddOuter || canAddInner ? "#9bc8d8" : "#d6a36f", fontSize: 11 }}
+            >
+              {panelSelectionStatus}
+            </span>
+            {canSelectLoop && (
+              <ActionButton text="Select Loop" disabled={false} onClick={onSelectLoop} />
+            )}
+            {!canSelectLoop && (
+              <>
+                <ActionButton
+                  text="Add Outer"
+                  disabled={!canAddOuter}
+                  onClick={onAddOuter}
+                  onPreview={(active) => onPreviewPanel(active ? "top" : null)}
+                />
+                <ActionButton
+                  text="Add Inner"
+                  disabled={!canAddInner}
+                  onClick={onAddInner}
+                  onPreview={(active) => onPreviewPanel(active ? "bottom" : null)}
+                />
+              </>
+            )}
+          </>
+        )}
+        {selectedPanelCount > 0 && (
+          <ActionButton
+            text={`Flip${selectedPanelCount > 1 ? ` (${selectedPanelCount})` : ""}`}
+            disabled={false}
+            onClick={onFlipPanels}
+          />
+        )}
       </div>
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
         {stats.map(([label, count]) => (
@@ -88,6 +147,47 @@ export function AppBar({
         ))}
       </div>
     </header>
+  );
+}
+
+function ActionButton({
+  text,
+  disabled,
+  onClick,
+  onPreview,
+}: {
+  text: string;
+  disabled: boolean;
+  onClick: () => void;
+  onPreview?: (active: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      onMouseEnter={() => {
+        if (!disabled) onPreview?.(true);
+      }}
+      onMouseLeave={() => onPreview?.(false)}
+      onFocus={() => {
+        if (!disabled) onPreview?.(true);
+      }}
+      onBlur={() => onPreview?.(false)}
+      style={{
+        height: 26,
+        padding: "0 8px",
+        border: `1px solid ${disabled ? "#263750" : "#4ecca3"}`,
+        borderRadius: 4,
+        background: disabled ? "transparent" : "#243d5a",
+        color: disabled ? "#50627b" : "#d7fff4",
+        cursor: disabled ? "default" : "pointer",
+        fontSize: 11,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {text}
+    </button>
   );
 }
 

@@ -10,27 +10,35 @@ import type {
   StrutKind,
   Attachments,
 } from "./types";
-import { CURRENT_SCENE_VERSION, nodeSize } from "./constants";
+import { CURRENT_SCENE_VERSION, oppositeFace, strutWidth } from "./constants";
 import {
-  add,
-  cross,
-  dot,
   faceNormal,
   getAttachmentPosition,
+  getCorner45PlaneNormal,
   getStrutRoutePoints,
   isCornerStrutKind,
   RULE_EPSILON,
+  cross,
+  dot,
   length,
   normalize,
-  scale,
   sub,
 } from "./rules";
 import {
   validateSceneNodePlacement,
   validateStrutPlacement,
   validateWidgetPlacement,
+  planStraightStrutRun,
+  findStraightStrutConflicts,
+  getStraightStrutTarget,
+  validateNodePlacement,
   type PlacementResult,
 } from "./placement";
+import {
+  createPanelBrushGeometry as solvePanelBrushGeometry,
+  type PanelBrushGeometry,
+  type PanelBrushSegment,
+} from "./brush";
 
 export function createNode(position: Vec3): NodeData {
   return {
@@ -49,6 +57,12 @@ function createEmptyAttachments(): Attachments {
     left: { occupied: false },
     right: { occupied: false },
   };
+}
+
+function samePosition(a: Vec3, b: Vec3): boolean {
+  return Math.abs(a.x - b.x) < RULE_EPSILON &&
+    Math.abs(a.y - b.y) < RULE_EPSILON &&
+    Math.abs(a.z - b.z) < RULE_EPSILON;
 }
 
 export function normalizeSceneAttachments(scene: SceneData): SceneData {
@@ -202,6 +216,99 @@ export function addStrutToScene(scene: SceneData, strut: StrutData): SceneData {
   });
 }
 
+/** Place one or more intersection-aware straight runs as one atomic mutation. */
+export function addStraightStrutRunsToScene(
+  scene: SceneData,
+  sourceNodeIds: string[],
+  fromFace: FaceName,
+  strutLength: number,
+): SceneData {
+  let result = scene;
+  for (const sourceNodeId of sourceNodeIds) {
+    const source = result.nodes[sourceNodeId];
+    if (!source) return scene;
+    const targetPosition = getStraightStrutTarget(source, fromFace, strutLength);
+    const conflicts = findStraightStrutConflicts(result, source.position, targetPosition, fromFace);
+    if (conflicts.some((conflict) => conflict.kind === "overlap")) return scene;
+
+    const crossedStruts = [...new Set(conflicts.map((conflict) => conflict.strutId))]
+      .map((strutId) => result.struts[strutId])
+      .filter((strut): strut is StrutData => Boolean(strut));
+    for (const strut of crossedStruts) {
+      result = removeStrutFromScene(result, strut.id);
+    }
+
+    const crossingPositions = conflicts
+      .filter((conflict): conflict is typeof conflict & { position: Vec3 } => Boolean(conflict.position))
+      .map((conflict) => conflict.position);
+    for (const position of crossingPositions) {
+      const existingNode = Object.values(result.nodes).find((node) =>
+        samePosition(node.position, position));
+      if (existingNode) continue;
+      if (!validateNodePlacement(result, position).valid) return scene;
+      result = addNodeToScene(result, createNode(position));
+    }
+
+    for (const crossedStrut of crossedStruts) {
+      const rebuilt = materializeStraightRun(
+        result,
+        crossedStrut.nodeA,
+        crossedStrut.faceA,
+        crossedStrut.length,
+      );
+      if (!rebuilt) return scene;
+      result = rebuilt;
+    }
+
+    const placed = materializeStraightRun(result, sourceNodeId, fromFace, strutLength);
+    if (!placed) return scene;
+    result = placed;
+  }
+
+  return hasNodeContact(result) ? scene : result;
+}
+
+function materializeStraightRun(
+  scene: SceneData,
+  sourceNodeId: string,
+  fromFace: FaceName,
+  strutLength: number,
+): SceneData | null {
+  const plan = planStraightStrutRun(scene, sourceNodeId, fromFace, strutLength);
+  if (!plan) return null;
+
+  let result = scene;
+  const runNodes = plan.nodes.map((plannedNode) => {
+    if (plannedNode.existingNodeId) {
+      return result.nodes[plannedNode.existingNodeId];
+    }
+    const newNode = createNode(plannedNode.position);
+    result = addNodeToScene(result, newNode);
+    return newNode;
+  });
+  if (runNodes.some((node) => !node)) return null;
+
+  const destinationFace = oppositeFace(fromFace);
+  for (const segment of plan.segments) {
+    const fromNode = runNodes[segment.fromIndex];
+    const toNode = runNodes[segment.toIndex];
+    if (!fromNode || !toNode) return null;
+    const strut: StrutData = {
+      id: crypto.randomUUID(),
+      nodeA: fromNode.id,
+      faceA: fromFace,
+      nodeB: toNode.id,
+      faceB: destinationFace,
+      length: segment.length,
+    };
+    if (!canConnectStrut(result, strut.nodeA, strut.faceA, strut.nodeB, strut.faceB)) {
+      return null;
+    }
+    result = addStrutToScene(result, strut);
+  }
+  return result;
+}
+
 export function removeStrutFromScene(scene: SceneData, strutId: string): SceneData {
   const strut = scene.struts[strutId];
   if (!strut) return scene;
@@ -224,7 +331,45 @@ export function canCreatePanel(scene: SceneData, strutIds: string[]): boolean {
   return validatePanelPlacement(scene, strutIds).valid;
 }
 
-export type PanelPlacementIssue = "invalid-loop" | "side-occupied";
+/** Find the shortest deterministic closed strut loop containing one strut. */
+export function getPanelLoopThroughStrut(scene: SceneData, strutId: string): string[] | null {
+  const target = scene.struts[strutId];
+  if (!target || target.nodeA === target.nodeB) return null;
+
+  const adjacency = new Map<string, Array<{ nodeId: string; strutId: string }>>();
+  for (const strut of Object.values(scene.struts)) {
+    if (strut.id === strutId || strut.nodeA === strut.nodeB) continue;
+    adjacency.set(strut.nodeA, [
+      ...(adjacency.get(strut.nodeA) ?? []),
+      { nodeId: strut.nodeB, strutId: strut.id },
+    ]);
+    adjacency.set(strut.nodeB, [
+      ...(adjacency.get(strut.nodeB) ?? []),
+      { nodeId: strut.nodeA, strutId: strut.id },
+    ]);
+  }
+  for (const connections of adjacency.values()) {
+    connections.sort((a, b) => a.strutId.localeCompare(b.strutId));
+  }
+
+  const queue: Array<{ nodeId: string; path: string[] }> = [{ nodeId: target.nodeA, path: [] }];
+  const visited = new Set([target.nodeA]);
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const connection of adjacency.get(current.nodeId) ?? []) {
+      const path = [...current.path, connection.strutId];
+      if (connection.nodeId === target.nodeB) {
+        return path.length >= 2 ? [strutId, ...path] : null;
+      }
+      if (visited.has(connection.nodeId)) continue;
+      visited.add(connection.nodeId);
+      queue.push({ nodeId: connection.nodeId, path });
+    }
+  }
+  return null;
+}
+
+export type PanelPlacementIssue = "invalid-loop" | "invalid-brush" | "side-occupied";
 
 /** Validate the closed-loop constraint and optional side occupancy for a panel. */
 export function validatePanelPlacement(
@@ -233,6 +378,16 @@ export function validatePanelPlacement(
   side?: "top" | "bottom",
 ): PlacementResult<PanelPlacementIssue> {
   if (!getPanelLoop(scene, strutIds)) return { valid: false, reason: "invalid-loop" };
+  if (side) {
+    if (!getPanelBrushGeometry(scene, strutIds, side)) {
+      return { valid: false, reason: "invalid-brush" };
+    }
+  } else if (
+    !getPanelBrushGeometry(scene, strutIds, "top") &&
+    !getPanelBrushGeometry(scene, strutIds, "bottom")
+  ) {
+    return { valid: false, reason: "invalid-brush" };
+  }
 
   const targetIds = [...new Set(strutIds)].sort();
   const occupiedSides = new Set(Object.values(scene.panels ?? {}).flatMap((panel) => {
@@ -245,7 +400,11 @@ export function validatePanelPlacement(
   return occupied ? { valid: false, reason: "side-occupied" } : { valid: true };
 }
 
-export function createPanelFromStruts(scene: SceneData, strutIds: string[]): PanelData | null {
+export function createPanelFromStruts(
+  scene: SceneData,
+  strutIds: string[],
+  requestedSide?: "top" | "bottom",
+): PanelData | null {
   const points = getPanelPoints(scene, strutIds);
   if (!points) return null;
 
@@ -256,8 +415,10 @@ export function createPanelFromStruts(scene: SceneData, strutIds: string[]): Pan
       panelStruts.every((id, index) => id === sortedStrutIds[index]);
     return sameLoop ? [panel.side ?? "top"] : [];
   }));
-  const side = existingSides.has("top") ? (existingSides.has("bottom") ? null : "bottom") : "top";
+  const side = requestedSide ??
+    (existingSides.has("top") ? (existingSides.has("bottom") ? null : "bottom") : "top");
   if (!side) return null;
+  if (!validatePanelPlacement(scene, sortedStrutIds, side).valid) return null;
 
   return {
     id: crypto.randomUUID(),
@@ -267,8 +428,8 @@ export function createPanelFromStruts(scene: SceneData, strutIds: string[]): Pan
 }
 
 export function addPanelToScene(scene: SceneData, panel: PanelData): SceneData {
-  if (!canCreatePanel(scene, panel.strutIds)) return scene;
   const panelSide = panel.side ?? "top";
+  if (!validatePanelPlacement(scene, panel.strutIds, panelSide).valid) return scene;
   const panelStruts = [...new Set(panel.strutIds)].sort();
   const sideOccupied = Object.values(scene.panels ?? {}).some((existingPanel) => {
     const existingStruts = [...new Set(existingPanel.strutIds)].sort();
@@ -323,70 +484,82 @@ export function getPanelPoints(scene: SceneData, strutIds: string[]): Vec3[] | n
   return loop.nodePoints;
 }
 
-export function getPanelBoundaryPoints(scene: SceneData, strutIds: string[]): Vec3[] | null {
-  const loop = getPanelLoop(scene, strutIds);
-  if (!loop) return null;
-
-  const points = loop.traversedStruts.flatMap((traversedStrut) => getTraversedStrutRoute(scene, traversedStrut));
-
-  return points.length >= 3 ? points : null;
-}
-
-export interface HullStripGeometry {
-  points: Vec3[];
-  indices: number[];
-}
-
-export function getPanelHullStrip(
+export function getPanelBrushGeometry(
   scene: SceneData,
   strutIds: string[],
   side: "top" | "bottom" = "top",
-): HullStripGeometry | null {
+): PanelBrushGeometry | null {
   const loop = getPanelLoop(scene, strutIds);
   if (!loop) return null;
 
-  const cornerRibs = loop.traversedStruts.filter(({ strut }) => isCornerStrutKind(strut.kind));
-  if (cornerRibs.length !== 2 || loop.traversedStruts.length !== 4) return null;
-
-  const firstRib = getTraversedStrutRoute(scene, cornerRibs[0]);
-  const secondRib = [...getTraversedStrutRoute(scene, cornerRibs[1])].reverse();
-  if (firstRib.length !== secondRib.length || firstRib.length < 2) return null;
-
-  const segmentNormals: Vec3[] = [];
-  for (let index = 0; index < firstRib.length - 1; index += 1) {
-    const along = sub(firstRib[index + 1], firstRib[index]);
-    const across = sub(secondRib[index], firstRib[index]);
-    let normal = normalize(cross(along, across));
-    if (length(normal) < RULE_EPSILON) return null;
-    const previous = segmentNormals[index - 1];
-    if (previous && dot(normal, previous) < 0) normal = scale(normal, -1);
-    segmentNormals.push(normal);
-  }
-
-  const offset = side === "bottom" ? -nodeSize / 2 : nodeSize / 2;
-  const points: Vec3[] = [];
-  for (let index = 0; index < firstRib.length; index += 1) {
-    const previous = segmentNormals[Math.max(0, index - 1)];
-    const next = segmentNormals[Math.min(segmentNormals.length - 1, index)];
-    const normal = normalize(add(previous, next));
-    const shift = scale(normal, offset);
-    points.push(add(firstRib[index], shift), add(secondRib[index], shift));
-  }
-
-  const indices: number[] = [];
-  for (let index = 0; index < firstRib.length - 1; index += 1) {
-    const a = index * 2;
-    const b = a + 1;
-    const nextA = a + 2;
-    const nextB = a + 3;
-    if (side === "bottom") {
-      indices.push(a, b, nextB, a, nextB, nextA);
-    } else {
-      indices.push(a, nextB, b, a, nextA, nextB);
+  const segments: PanelBrushSegment[] = loop.traversedStruts.flatMap((traversed) => {
+    const route = getTraversedStrutRoute(scene, traversed);
+    if (isCornerStrutKind(traversed.strut.kind)) {
+      if (route.length < 4) return [];
+      return [{
+        from: route[1],
+        to: route[route.length - 2],
+        flatNormal: getCorner45PlaneNormal(traversed.strut.faceA, traversed.strut.faceB),
+      }];
     }
+    return route.slice(0, -1).map((from, index) => ({
+      from,
+      to: route[index + 1],
+    }));
+  });
+
+  const panelPoints = segments.flatMap((segment) => [segment.from, segment.to]);
+  const panelCenter = averagePositions(panelPoints);
+  const assemblyCenter = averagePositions(Object.values(scene.nodes).map((node) => node.position));
+  const outwardHint = {
+    x: panelCenter.x - assemblyCenter.x,
+    y: panelCenter.y - assemblyCenter.y,
+    z: panelCenter.z - assemblyCenter.z,
+  };
+  const outwardDistance = Math.hypot(outwardHint.x, outwardHint.y, outwardHint.z);
+  return solvePanelBrushGeometry(
+    segments,
+    strutWidth,
+    side,
+    outwardDistance > RULE_EPSILON ? outwardHint : undefined,
+    getCoplanarSurfacePlane(loop.nodePoints, segments),
+  );
+}
+
+function getCoplanarSurfacePlane(
+  points: Vec3[],
+  segments: PanelBrushSegment[],
+): { normal: Vec3; constant: number } | undefined {
+  if (points.length < 3) return undefined;
+  const normal = normalize(cross(sub(points[1], points[0]), sub(points[2], points[0])));
+  if (length(normal) < RULE_EPSILON) return undefined;
+  const nodeConstant = dot(normal, points[0]);
+  if (!points.every((point) => Math.abs(dot(normal, point) - nodeConstant) < RULE_EPSILON)) {
+    return undefined;
   }
 
-  return { points, indices };
+  // Node centers establish orientation, while the panel's mid-surface follows
+  // the actual boundary runs. Corner-strut routes can be parallel to, but
+  // offset from, the plane through their endpoint node centers.
+  const constant = segments.reduce((sum, segment) => {
+    const midpoint = {
+      x: (segment.from.x + segment.to.x) / 2,
+      y: (segment.from.y + segment.to.y) / 2,
+      z: (segment.from.z + segment.to.z) / 2,
+    };
+    return sum + dot(normal, midpoint);
+  }, 0) / segments.length;
+  return { normal, constant };
+}
+
+function averagePositions(points: Vec3[]): Vec3 {
+  if (points.length === 0) return { x: 0, y: 0, z: 0 };
+  const sum = points.reduce((result, point) => ({
+    x: result.x + point.x,
+    y: result.y + point.y,
+    z: result.z + point.z,
+  }), { x: 0, y: 0, z: 0 });
+  return { x: sum.x / points.length, y: sum.y / points.length, z: sum.z / points.length };
 }
 
 function getPanelLoop(
