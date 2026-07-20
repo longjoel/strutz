@@ -4,6 +4,7 @@ const WIDGETS: Array<{ kind: WidgetKind; label: string; icon: string }> = [
   { kind: "antenna", label: "Antenna", icon: "A" },
   { kind: "rocket-engine", label: "Engine", icon: "E" },
   { kind: "cockpit", label: "Cockpit", icon: "C" },
+  { kind: "wheel", label: "Wheel", icon: "◉" },
 ];
 
 export function WidgetPalette({

@@ -8,6 +8,11 @@ export interface QuadSurface {
   quads: Quad[];
 }
 
+export interface TriangleSurface {
+  vertices: Vec3[];
+  indices: number[];
+}
+
 const BOX_FACES: Array<{ face: FaceName; quad: Quad }> = [
   { face: "back", quad: [3, 2, 1, 0] },
   { face: "front", quad: [5, 6, 7, 4] },
@@ -96,8 +101,79 @@ export function createStrutSurface(
   return { vertices, quads };
 }
 
+/** Close both endpoint rings for standalone solid/export geometry. */
+export function capStrutSurface(surface: QuadSurface): QuadSurface {
+  if (surface.vertices.length < 8 || surface.vertices.length % 4 !== 0) return surface;
+  const end = surface.vertices.length - 4;
+  return {
+    vertices: surface.vertices,
+    quads: [
+      ...surface.quads,
+      [0, 1, 2, 3],
+      [end + 3, end + 2, end + 1, end],
+    ],
+  };
+}
+
 export function triangulateQuadSurface(surface: QuadSurface): number[] {
   return surface.quads.flatMap(([a, b, c, d]) => [a, b, c, a, c, d]);
+}
+
+/** Revolve an ordered radius/axis profile into one closed oriented solid. */
+export function createRadialProfileSurface(
+  origin: Vec3,
+  xAxis: Vec3,
+  yAxis: Vec3,
+  zAxis: Vec3,
+  profile: ReadonlyArray<{ offset: number; radius: number }>,
+  segments = 24,
+): TriangleSurface {
+  if (profile.length < 2 || segments < 3 || profile.some((point) => point.radius <= 0)) {
+    return { vertices: [], indices: [] };
+  }
+  const vertices: Vec3[] = [];
+  for (const point of profile) {
+    for (let segment = 0; segment < segments; segment += 1) {
+      const angle = segment / segments * Math.PI * 2;
+      vertices.push(add(
+        add(origin, scale(yAxis, point.offset)),
+        add(scale(xAxis, Math.cos(angle) * point.radius), scale(zAxis, Math.sin(angle) * point.radius)),
+      ));
+    }
+  }
+  const bottomCenter = vertices.length;
+  vertices.push(add(origin, scale(yAxis, profile[0].offset)));
+  const topCenter = vertices.length;
+  vertices.push(add(origin, scale(yAxis, profile[profile.length - 1].offset)));
+
+  const indices: number[] = [];
+  for (let ring = 0; ring < profile.length - 1; ring += 1) {
+    const from = ring * segments;
+    const to = (ring + 1) * segments;
+    for (let segment = 0; segment < segments; segment += 1) {
+      const next = (segment + 1) % segments;
+      indices.push(
+        from + segment, to + next, from + next,
+        from + segment, to + segment, to + next,
+      );
+    }
+  }
+  const top = (profile.length - 1) * segments;
+  for (let segment = 0; segment < segments; segment += 1) {
+    const next = (segment + 1) % segments;
+    indices.push(
+      bottomCenter, segment, next,
+      topCenter, top + next, top + segment,
+    );
+  }
+
+  // Widget frames can be mirrored depending on attachment face; preserve outward winding.
+  if (dot(cross(xAxis, yAxis), zAxis) < 0) {
+    for (let index = 0; index < indices.length; index += 3) {
+      [indices[index + 1], indices[index + 2]] = [indices[index + 2], indices[index + 1]];
+    }
+  }
+  return { vertices, indices };
 }
 
 function getSweepNormal(direction: Vec3, flatNormal?: Vec3): Vec3 {

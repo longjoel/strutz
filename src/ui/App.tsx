@@ -15,9 +15,31 @@ import { createRootScene, exportSceneJson, exportSceneObj } from "../core/docume
 import { WidgetPalette } from "./WidgetPalette";
 import { AppBar } from "./AppBar";
 import { exportSceneGltf } from "./exportGltf";
-import { CURRENT_SCENE_VERSION } from "../core/constants";
+import { CURRENT_SCENE_VERSION, DEFAULT_LAYER_ID } from "../core/constants";
 import type { CameraMode } from "./camera";
 import { getPanelActionState } from "./panelActions";
+import { LayersPanel } from "./LayersPanel";
+import {
+  assignSelectionToLayer,
+  createLayerInScene,
+  deleteLayerFromScene,
+  getPartLayerId,
+  renameLayerInScene,
+  selectLayerContents,
+  setLayerVisibilityInScene,
+} from "../core/layers";
+import type { SceneSelection } from "../core/types";
+import {
+  createAssemblyClipboard,
+  mergeAssemblyIntoScene,
+  parseAssemblyClipboard,
+  prepareAssemblyPaste,
+  selectionForAssembly,
+  serializeAssemblyClipboard,
+  type AssemblyClipboard,
+} from "../core/composition";
+import { exportSceneStl } from "../core/exportStl";
+import { PrintExportDialog } from "./PrintExportDialog";
 
 interface HistoryState {
   past: SceneData[];
@@ -35,6 +57,15 @@ export function App() {
   const [followSelection, setFollowSelection] = useState(true);
   const [selectedStrutIds, setSelectedStrutIds] = useState<Set<string>>(new Set());
   const [selectedPanelIds, setSelectedPanelIds] = useState<Set<string>>(new Set());
+  const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
+  const [selectedWidgetIds, setSelectedWidgetIds] = useState<Set<string>>(new Set());
+  const [activeLayerId, setActiveLayerId] = useState(DEFAULT_LAYER_ID);
+  const [pasteAssembly, setPasteAssembly] = useState<AssemblyClipboard | null>(null);
+  const [compositionStatus, setCompositionStatus] = useState<string | null>(null);
+  const [printExportOpen, setPrintExportOpen] = useState(false);
+  const [printScaleInput, setPrintScaleInput] = useState("2");
+  const [printExportError, setPrintExportError] = useState<string | null>(null);
+  const [printExporting, setPrintExporting] = useState(false);
   const [panelPreviewSide, setPanelPreviewSide] = useState<"top" | "bottom" | null>(null);
   const [history, setHistory] = useState<HistoryState>(() => ({
     past: [],
@@ -44,6 +75,7 @@ export function App() {
   const [fileName, setFileName] = useState("strutz.json");
   const [filePath, setFilePath] = useState<string | null>(null);
   const openInputRef = useRef<HTMLInputElement>(null);
+  const clipboardRef = useRef<AssemblyClipboard | null>(null);
 
   const sceneData = history.present;
   const electron = window.strutzElectron;
@@ -74,10 +106,88 @@ export function App() {
     });
     setSelectedStrutIds(new Set());
     setSelectedPanelIds(new Set());
+    setSelectedNodeIds(new Set());
+    setSelectedWidgetIds(new Set());
+    setActiveLayerId(DEFAULT_LAYER_ID);
+    setPasteAssembly(null);
     setPanelPreviewSide(null);
   }, []);
 
+  useEffect(() => {
+    const activeLayer = sceneData.layers?.find((layer) => layer.id === activeLayerId);
+    if (activeLayer?.visible) return;
+    const visibleLayer = sceneData.layers?.find((layer) => layer.visible);
+    if (visibleLayer) {
+      setActiveLayerId(visibleLayer.id);
+      return;
+    }
+    setSceneData((scene) => setLayerVisibilityInScene(scene, DEFAULT_LAYER_ID, true));
+    setActiveLayerId(DEFAULT_LAYER_ID);
+  }, [activeLayerId, sceneData.layers, setSceneData]);
+
   const selectedStrutIdList = useMemo(() => [...selectedStrutIds], [selectedStrutIds]);
+  const selection = useMemo<SceneSelection>(() => ({
+    nodeIds: selectedNodeIds,
+    strutIds: selectedStrutIds,
+    panelIds: selectedPanelIds,
+    widgetIds: selectedWidgetIds,
+  }), [selectedNodeIds, selectedPanelIds, selectedStrutIds, selectedWidgetIds]);
+  const hasSelection = selectedNodeIds.size + selectedStrutIds.size +
+    selectedPanelIds.size + selectedWidgetIds.size > 0;
+
+  const copySelection = useCallback(async () => {
+    const clipboard = createAssemblyClipboard(sceneData, selection);
+    if (!clipboard) {
+      setCompositionStatus("Nothing selected to copy.");
+      return;
+    }
+    clipboardRef.current = clipboard;
+    const text = serializeAssemblyClipboard(clipboard);
+    try {
+      if (electron?.writeClipboardText) await electron.writeClipboardText(text);
+      else await navigator.clipboard?.writeText(text);
+    } catch {
+      // The in-memory clipboard remains available when browser permissions deny access.
+    }
+    setCompositionStatus("Selection copied.");
+  }, [electron, sceneData, selection]);
+
+  const beginPaste = useCallback(async () => {
+    let clipboard: AssemblyClipboard | null = null;
+    try {
+      const text = electron?.readClipboardText
+        ? await electron.readClipboardText()
+        : await navigator.clipboard?.readText();
+      if (text) clipboard = parseAssemblyClipboard(text);
+    } catch {
+      // Fall back to the last assembly copied in this renderer.
+    }
+    clipboard ??= clipboardRef.current;
+    if (!clipboard) {
+      setCompositionStatus("Clipboard does not contain a Strutz assembly.");
+      return;
+    }
+    setPasteAssembly(prepareAssemblyPaste(clipboard, activeLayerId));
+    setPanelPreviewSide(null);
+    setCompositionStatus(null);
+  }, [activeLayerId, electron]);
+
+  const commitPaste = useCallback((assembly: SceneData) => {
+    setSceneData((scene) => mergeAssemblyIntoScene(scene, assembly));
+    const next = selectionForAssembly(assembly);
+    setSelectedNodeIds(next.nodeIds);
+    setSelectedStrutIds(next.strutIds);
+    setSelectedPanelIds(next.panelIds);
+    setSelectedWidgetIds(next.widgetIds);
+    setPasteAssembly(null);
+    setCompositionStatus("Assembly placed.");
+  }, [setSceneData]);
+
+  useEffect(() => {
+    if (!compositionStatus) return;
+    const timeout = window.setTimeout(() => setCompositionStatus(null), 2200);
+    return () => window.clearTimeout(timeout);
+  }, [compositionStatus]);
   const panelActionState = useMemo(
     () => getPanelActionState(sceneData, selectedStrutIdList),
     [sceneData, selectedStrutIdList],
@@ -87,9 +197,52 @@ export function App() {
     setPanelPreviewSide(null);
     setSceneData((scene) => {
       const panel = createPanelFromStruts(scene, selectedStrutIdList, side);
-      return panel ? addPanelToScene(scene, panel) : scene;
+      return panel ? addPanelToScene(scene, { ...panel, layerId: activeLayerId }) : scene;
     });
-  }, [selectedStrutIdList, setSceneData]);
+  }, [activeLayerId, selectedStrutIdList, setSceneData]);
+
+  const createLayer = useCallback(() => {
+    const nextLayerId = crypto.randomUUID();
+    setSceneData((scene) => createLayerInScene(scene, undefined, nextLayerId).scene);
+    setActiveLayerId(nextLayerId);
+  }, [setSceneData]);
+
+  const toggleLayerVisibility = useCallback((layerId: string, visible: boolean) => {
+    const replacement = !visible && activeLayerId === layerId
+      ? sceneData.layers?.find((layer) => layer.id !== layerId && layer.visible)
+      : undefined;
+    setSceneData((scene) => {
+      let next = setLayerVisibilityInScene(scene, layerId, visible);
+      if (!visible && activeLayerId === layerId && !replacement) {
+        next = setLayerVisibilityInScene(next, DEFAULT_LAYER_ID, true);
+      }
+      return next;
+    });
+    if (!visible) {
+      const hiddenNodes = new Set(Object.values(sceneData.nodes)
+        .filter((part) => getPartLayerId(part) === layerId).map((part) => part.id));
+      const hiddenStruts = new Set(Object.values(sceneData.struts)
+        .filter((part) => getPartLayerId(part) === layerId).map((part) => part.id));
+      const hiddenPanels = new Set(Object.values(sceneData.panels)
+        .filter((part) => getPartLayerId(part) === layerId).map((part) => part.id));
+      const hiddenWidgets = new Set(Object.values(sceneData.widgets)
+        .filter((part) => getPartLayerId(part) === layerId).map((part) => part.id));
+      setSelectedNodeIds((ids) => new Set([...ids].filter((id) => !hiddenNodes.has(id))));
+      setSelectedStrutIds((ids) => new Set([...ids].filter((id) => !hiddenStruts.has(id))));
+      setSelectedPanelIds((ids) => new Set([...ids].filter((id) => !hiddenPanels.has(id))));
+      setSelectedWidgetIds((ids) => new Set([...ids].filter((id) => !hiddenWidgets.has(id))));
+      if (activeLayerId === layerId) {
+        if (replacement) setActiveLayerId(replacement.id);
+        else setActiveLayerId(DEFAULT_LAYER_ID);
+      }
+    }
+  }, [activeLayerId, sceneData, setSceneData]);
+
+  const activateLayer = useCallback((layerId: string) => {
+    const layer = sceneData.layers?.find((candidate) => candidate.id === layerId);
+    if (layer && !layer.visible) setSceneData((scene) => setLayerVisibilityInScene(scene, layerId, true));
+    setActiveLayerId(layerId);
+  }, [sceneData.layers, setSceneData]);
 
   const selectCompleteLoop = useCallback(() => {
     const strutId = selectedStrutIdList.length === 1 ? selectedStrutIdList[0] : null;
@@ -250,6 +403,33 @@ export function App() {
     }
   }, [electron, fileName, sceneData]);
 
+  const exportStl = useCallback(() => {
+    setPrintScaleInput("2");
+    setPrintExportError(null);
+    setPrintExportOpen(true);
+  }, []);
+
+  const confirmExportStl = useCallback(async () => {
+    const scale = Number(printScaleInput);
+    if (!Number.isFinite(scale) || scale <= 0) {
+      setPrintExportError("Enter a print scale greater than zero.");
+      return;
+    }
+    const exportName = fileName.replace(/\.json$/i, ".stl");
+    setPrintExportError(null);
+    setPrintExporting(true);
+    try {
+      const text = exportSceneStl(sceneData, scale);
+      if (electron) await electron.exportScene({ fileName: exportName, text, type: "stl" });
+      else downloadText(exportName, text, "model/stl");
+      setPrintExportOpen(false);
+    } catch (error) {
+      setPrintExportError(error instanceof Error ? error.message : "Could not export printable STL.");
+    } finally {
+      setPrintExporting(false);
+    }
+  }, [electron, fileName, printScaleInput, sceneData]);
+
   const handleOpenFile = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -288,15 +468,24 @@ export function App() {
         case "export-gltf":
           void exportGltf();
           break;
+        case "export-stl":
+          void exportStl();
+          break;
         case "undo":
           undo();
           break;
         case "redo":
           redo();
           break;
+        case "copy":
+          void copySelection();
+          break;
+        case "paste":
+          void beginPaste();
+          break;
       }
     });
-  }, [electron, exportGltf, exportJson, exportObj, newScene, open, redo, save, saveAs, undo]);
+  }, [beginPaste, copySelection, electron, exportGltf, exportJson, exportObj, exportStl, newScene, open, redo, save, saveAs, undo]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -328,11 +517,21 @@ export function App() {
         event.preventDefault();
         newScene();
       }
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
+        event.preventDefault();
+        void copySelection();
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") {
+        event.preventDefault();
+        void beginPaste();
+      }
     };
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [newScene, open, redo, save, saveAs, undo]);
+  }, [beginPaste, copySelection, newScene, open, redo, save, saveAs, undo]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%" }}>
@@ -343,8 +542,23 @@ export function App() {
         style={{ display: "none" }}
         onChange={handleOpenFile}
       />
+      {printExportOpen && (
+        <PrintExportDialog
+          scene={sceneData}
+          scaleInput={printScaleInput}
+          error={printExportError}
+          exporting={printExporting}
+          onScaleInput={(value) => {
+            setPrintScaleInput(value);
+            setPrintExportError(null);
+          }}
+          onCancel={() => setPrintExportOpen(false)}
+          onExport={() => void confirmExportStl()}
+        />
+      )}
       <AppBar
         fileName={fileName}
+        status={compositionStatus}
         scene={sceneData}
         canUndo={history.past.length > 0}
         canRedo={history.future.length > 0}
@@ -380,7 +594,42 @@ export function App() {
           setSelectedStrutIds={setSelectedStrutIds}
           selectedPanelIds={selectedPanelIds}
           setSelectedPanelIds={setSelectedPanelIds}
+          selectedNodeIds={selectedNodeIds}
+          setSelectedNodeIds={setSelectedNodeIds}
+          selectedWidgetIds={selectedWidgetIds}
+          setSelectedWidgetIds={setSelectedWidgetIds}
+          activeLayerId={activeLayerId}
+          pasteAssembly={pasteAssembly}
+          onCancelPaste={() => setPasteAssembly(null)}
+          onCommitPaste={commitPaste}
           panelPreviewSide={panelPreviewSide}
+        />
+        <LayersPanel
+          scene={sceneData}
+          activeLayerId={activeLayerId}
+          hasSelection={hasSelection}
+          onActivate={activateLayer}
+          onToggleVisibility={toggleLayerVisibility}
+          onCreate={createLayer}
+          onRename={(layerId, name) => setSceneData((scene) => renameLayerInScene(scene, layerId, name))}
+          onDelete={(layerId) => {
+            setSceneData((scene) => {
+              const deleted = deleteLayerFromScene(scene, layerId);
+              return activeLayerId === layerId
+                ? setLayerVisibilityInScene(deleted, DEFAULT_LAYER_ID, true)
+                : deleted;
+            });
+            if (activeLayerId === layerId) setActiveLayerId(DEFAULT_LAYER_ID);
+          }}
+          onSelectContents={(layerId) => {
+            const next = selectLayerContents(sceneData, layerId);
+            setSelectedNodeIds(next.nodeIds);
+            setSelectedStrutIds(next.strutIds);
+            setSelectedPanelIds(next.panelIds);
+            setSelectedWidgetIds(next.widgetIds);
+          }}
+          onMoveSelection={(layerId) => setSceneData((scene) =>
+            assignSelectionToLayer(scene, selection, layerId))}
         />
         <div
           style={{

@@ -15,4 +15,10 @@ contextBridge.exposeInMainWorld("strutzElectron", {
   exportScene(payload) {
     return ipcRenderer.invoke("file:export-scene", payload);
   },
+  writeClipboardText(text) {
+    return ipcRenderer.invoke("clipboard:write-text", text);
+  },
+  readClipboardText() {
+    return ipcRenderer.invoke("clipboard:read-text");
+  },
 });

@@ -6,8 +6,11 @@ type StrutzMenuCommand =
   | "export-json"
   | "export-obj"
   | "export-gltf"
+  | "export-stl"
   | "undo"
-  | "redo";
+  | "redo"
+  | "copy"
+  | "paste";
 
 interface OpenSceneResult {
   canceled: boolean;
@@ -38,8 +41,10 @@ interface StrutzElectronApi {
   exportScene(payload: {
     fileName: string;
     text: string;
-    type: "json" | "obj" | "gltf";
+    type: "json" | "obj" | "gltf" | "stl";
   }): Promise<ExportSceneResult>;
+  writeClipboardText(text: string): Promise<void>;
+  readClipboardText(): Promise<string>;
 }
 
 interface Window {

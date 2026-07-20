@@ -3,6 +3,7 @@ import type { CameraMode } from "./camera";
 
 export function AppBar({
   fileName,
+  status,
   scene,
   canUndo,
   canRedo,
@@ -24,6 +25,7 @@ export function AppBar({
   onPreviewPanel,
 }: {
   fileName: string;
+  status?: string | null;
   scene: SceneData;
   canUndo: boolean;
   canRedo: boolean;
@@ -82,6 +84,7 @@ export function AppBar({
         {fileName}
       </div>
       <div style={{ height: 18, width: 1, background: "#254368" }} />
+      {status && <span style={{ color: "#9bc8d8", fontSize: 11 }}>{status}</span>}
       <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
         <IconButton label="Undo" icon="↶" disabled={!canUndo} onClick={onUndo} />
         <IconButton label="Redo" icon="↷" disabled={!canRedo} onClick={onRedo} />

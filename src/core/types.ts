@@ -18,12 +18,15 @@ export type Attachments = Record<FaceName, AttachmentState>;
 
 export interface NodeData {
   id: string;
+  /** Missing only on legacy, pre-layer documents. */
+  layerId?: string;
   position: Vec3;
   attachments: Attachments;
 }
 
 export interface StrutData {
   id: string;
+  layerId?: string;
   kind?: StrutKind;
   nodeA: string;
   faceA: FaceName;
@@ -34,6 +37,7 @@ export interface StrutData {
 
 export interface PanelData {
   id: string;
+  layerId?: string;
   strutIds: string[];
   side?: "top" | "bottom";
 }
@@ -54,10 +58,11 @@ export interface AccessoryDefinition {
   color: string;
 }
 
-export type WidgetKind = "antenna" | "rocket-engine" | "cockpit";
+export type WidgetKind = "antenna" | "rocket-engine" | "cockpit" | "wheel";
 
 export interface WidgetData {
   id: string;
+  layerId?: string;
   kind: WidgetKind;
   nodeId: string;
   face: FaceName;
@@ -67,10 +72,25 @@ export interface WidgetData {
 export interface SceneData {
   /** Missing means the pre-versioned legacy format. */
   schemaVersion?: number;
+  /** Missing only on version 1 and pre-versioned documents. */
+  layers?: LayerData[];
   nodes: Record<string, NodeData>;
   struts: Record<string, StrutData>;
   panels: Record<string, PanelData>;
   widgets: Record<string, WidgetData>;
   /** Legacy input only. normalizeSceneAttachments migrates these to widgets. */
   accessories?: Record<string, AccessoryData>;
+}
+
+export interface LayerData {
+  id: string;
+  name: string;
+  visible: boolean;
+}
+
+export interface SceneSelection {
+  nodeIds: Set<string>;
+  strutIds: Set<string>;
+  panelIds: Set<string>;
+  widgetIds: Set<string>;
 }

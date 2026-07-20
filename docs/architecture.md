@@ -12,7 +12,11 @@ The findings and recommended follow-up order from the first cleanup pass are in 
 - `src/core/brush.ts`: renderer-independent half-space clipping and panel brush geometry.
 - `src/core/placement.ts`: renderer-independent placement decisions and reasoned validation results.
 - `src/core/scene.ts`: immutable scene mutations, attachment normalization, panel topology, and cascade deletion.
+- `src/core/layers.ts`: flat layer membership, visibility, selection assignment, and deletion reassignment.
+- `src/core/composition.ts`: dependency-closed assembly clipboard payloads, grid-safe rotations, placement validation, and merging.
+- `src/core/widgetGeometry.ts`: shared widget orientation frames and renderer-independent oriented collision volumes.
 - `src/core/document.ts`: scene creation and text/OBJ serialization.
+- `src/core/exportStl.ts`: weldable, millimeter-scaled STL serialization for slicers.
 - `src/ui`: React interaction state and Three.js rendering.
 - `electron`: native file/menu adapter. The browser build remains usable without it.
 

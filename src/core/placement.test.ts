@@ -193,7 +193,9 @@ describe("placement rules", () => {
   it("reserves a node face for exactly one strut or widget", () => {
     const occupied = node("a", { x: 0, y: 0, z: 0 });
     occupied.attachments.top = { occupied: true, occupantId: "existing", occupantType: "strut" };
-    expect(validateWidgetPlacement(makeScene(occupied), { nodeId: "a", face: "top" })).toEqual({
+    expect(validateWidgetPlacement(makeScene(occupied), {
+      kind: "antenna", nodeId: "a", face: "top", rotation: 0,
+    })).toEqual({
       valid: false,
       reason: "occupied-face",
     });

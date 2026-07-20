@@ -13,6 +13,7 @@ import type {
   WidgetKind,
   FaceName,
   StrutKind,
+  Vec3,
 } from "../core/types";
 import {
   createNode,
@@ -34,7 +35,7 @@ import {
   getAttachmentWorldPosition,
   hasNodeContact,
 } from "../core/scene";
-import { nodeSize, strutWidth, VALID_STRUT_LENGTHS } from "../core/constants";
+import { nodeSize, strutWidth, VALID_STRUT_LENGTHS, WHEEL_GEOMETRY } from "../core/constants";
 import {
   FACE_NORMALS as RULE_FACE_NORMALS,
   centerSpacingForStrutLength,
@@ -52,6 +53,15 @@ import {
   getStraightStrutTarget,
 } from "../core/placement";
 import { SCENE_COLORS } from "./sceneColors";
+import { getPartLayerId, getVisibleLayerIds } from "../core/layers";
+import {
+  IDENTITY_ROTATION,
+  placeAssembly,
+  quarterTurn,
+  validateAssemblyPaste,
+  type AssemblyClipboard,
+  type RotationMatrix,
+} from "../core/composition";
 import { GROUND_PLANE_Y } from "./viewportConfig";
 import {
   getFaceForAxisLock,
@@ -174,6 +184,14 @@ interface SceneProps {
   setSelectedStrutIds: Dispatch<SetStateAction<Set<string>>>;
   selectedPanelIds: Set<string>;
   setSelectedPanelIds: Dispatch<SetStateAction<Set<string>>>;
+  selectedNodeIds: Set<string>;
+  setSelectedNodeIds: Dispatch<SetStateAction<Set<string>>>;
+  selectedWidgetIds: Set<string>;
+  setSelectedWidgetIds: Dispatch<SetStateAction<Set<string>>>;
+  activeLayerId: string;
+  pasteAssembly: AssemblyClipboard | null;
+  onCancelPaste: () => void;
+  onCommitPaste: (assembly: SceneData) => void;
   panelPreviewSide: "top" | "bottom" | null;
 }
 
@@ -188,6 +206,14 @@ export function Scene({
   setSelectedStrutIds,
   selectedPanelIds,
   setSelectedPanelIds,
+  selectedNodeIds,
+  setSelectedNodeIds,
+  selectedWidgetIds,
+  setSelectedWidgetIds,
+  activeLayerId,
+  pasteAssembly,
+  onCancelPaste,
+  onCommitPaste,
   panelPreviewSide,
 }: SceneProps) {
   const [drawState, setDrawState] = useState<{
@@ -198,17 +224,39 @@ export function Scene({
   const [hoverDrawLength, setHoverDrawLength] = useState<number | null>(null);
   const [hoverCornerKey, setHoverCornerKey] = useState<string | null>(null);
   const [drawAxisLock, setDrawAxisLock] = useState<StructuralDrawAxis | null>(null);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [selectedWidgetIds, setSelectedWidgetIds] = useState<Set<string>>(new Set());
   const [hoveredPart, setHoveredPart] = useState<string | null>(null);
+  const [pasteTarget, setPasteTarget] = useState<Vec3 | null>(null);
+  const [pasteRotation, setPasteRotation] = useState<RotationMatrix>(IDENTITY_ROTATION);
   const sceneDataRef = useRef(sceneData);
   sceneDataRef.current = sceneData;
+  const visibleLayerIds = useMemo(() => getVisibleLayerIds(sceneData), [sceneData.layers]);
+  const visible = useCallback(
+    (part: { layerId?: string }) => visibleLayerIds.has(getPartLayerId(part)),
+    [visibleLayerIds],
+  );
 
   const updateHoveredPart = useCallback((key: string, hovered: boolean) => {
     setHoveredPart((current) => hovered ? key : current === key ? null : current);
   }, []);
 
   const { camera } = useThree();
+  const pasteCandidate = useMemo(() => pasteAssembly && pasteTarget
+    ? placeAssembly(pasteAssembly, pasteRotation, pasteTarget)
+    : null, [pasteAssembly, pasteRotation, pasteTarget]);
+  const pasteValid = useMemo(() => pasteCandidate
+    ? validateAssemblyPaste(sceneData, pasteCandidate)
+    : false, [pasteCandidate, sceneData]);
+
+  useEffect(() => {
+    if (!pasteAssembly) {
+      setPasteTarget(null);
+      setPasteRotation(IDENTITY_ROTATION);
+      return;
+    }
+    setDrawState(null);
+    setPasteTarget({ x: 0, y: 0, z: 0 });
+    setPasteRotation(IDENTITY_ROTATION);
+  }, [pasteAssembly]);
 
   const commitStrut = useCallback(
     (
@@ -239,6 +287,7 @@ export function Scene({
 
       const strut: StrutData = {
         id: crypto.randomUUID(),
+        layerId: activeLayerId,
         kind,
         nodeA: fromNodeId,
         faceA: fromFace,
@@ -248,7 +297,7 @@ export function Scene({
       };
       setSceneData((prev) => addStrutToScene(prev, strut));
     },
-    [],
+    [activeLayerId, setSceneData],
   );
 
   const placeDrawStrutAtLength = useCallback(
@@ -264,11 +313,12 @@ export function Scene({
         drawState.sourceNodeIds,
         fromFace,
         length,
+        activeLayerId,
       ));
       if (nextFocus) onFocusPoint(nextFocus);
       setDrawState(null);
     },
-    [drawState, onFocusPoint],
+    [activeLayerId, drawState, onFocusPoint, setSceneData],
   );
 
   const updateStructuralDrawCandidate = useCallback(
@@ -322,6 +372,11 @@ export function Scene({
 
   const handleGroundClick = useCallback(
     (event: ThreeEvent<MouseEvent>) => {
+      if (pasteAssembly) {
+        event.stopPropagation();
+        if (event.delta < 3 && pasteCandidate && pasteValid) onCommitPaste(pasteCandidate);
+        return;
+      }
       if (activeTool === "draw-strut" && strutDrawMode === "straight" && drawState) {
         event.stopPropagation();
         const sourceNode = sceneDataRef.current.nodes[drawState.fromNodeId];
@@ -346,14 +401,18 @@ export function Scene({
 
       setDrawState(null);
     },
-    [activeTool, camera, drawAxisLock, drawState, placeDrawStrutAtLength, strutDrawMode],
+    [activeTool, camera, drawAxisLock, drawState, onCommitPaste, pasteAssembly, pasteCandidate, pasteValid, placeDrawStrutAtLength, strutDrawMode],
   );
 
   const handleGroundPointerMove = useCallback(
     (event: ThreeEvent<PointerEvent>) => {
+      if (pasteAssembly) {
+        setPasteTarget({ x: Math.round(event.point.x), y: 0, z: Math.round(event.point.z) });
+        return;
+      }
       updateStructuralDrawCandidate(event.pointer);
     },
-    [updateStructuralDrawCandidate],
+    [pasteAssembly, updateStructuralDrawCandidate],
   );
 
   const handleNodeClick = useCallback(
@@ -363,7 +422,7 @@ export function Scene({
 
       if (event.nativeEvent.shiftKey) {
         event.stopPropagation();
-        setSelectedIds((prev) => {
+        setSelectedNodeIds((prev) => {
           const next = new Set(prev);
           if (next.has(nodeId)) next.delete(nodeId);
           else next.add(nodeId);
@@ -376,8 +435,8 @@ export function Scene({
         event.stopPropagation();
 
         if (!drawState) {
-          const sourceNodeIds = strutDrawMode === "straight" && selectedIds.has(nodeId) && selectedIds.size > 1
-            ? [...selectedIds]
+          const sourceNodeIds = strutDrawMode === "straight" && selectedNodeIds.has(nodeId) && selectedNodeIds.size > 1
+            ? [...selectedNodeIds]
             : [nodeId];
           if (strutDrawMode === "straight" && clickedNode) {
             const availableFaces = FACE_ENTRIES
@@ -408,8 +467,8 @@ export function Scene({
 
         if (drawState.fromNodeId === nodeId) {
           if (face) {
-            const sourceNodeIds = strutDrawMode === "straight" && selectedIds.has(nodeId) && selectedIds.size > 1
-              ? [...selectedIds]
+            const sourceNodeIds = strutDrawMode === "straight" && selectedNodeIds.has(nodeId) && selectedNodeIds.size > 1
+              ? [...selectedNodeIds]
               : [nodeId];
             setDrawState({ fromNodeId: nodeId, fromFace: face, sourceNodeIds });
           }
@@ -473,6 +532,7 @@ export function Scene({
         event.stopPropagation();
         const widget: WidgetData = {
           id: crypto.randomUUID(),
+          layerId: activeLayerId,
           kind: selectedWidgetKind,
           nodeId,
           face,
@@ -481,7 +541,7 @@ export function Scene({
         setSceneData((prev) => addWidgetToScene(prev, widget));
       }
     },
-    [activeTool, camera, drawState, commitStrut, onFocusPoint, placeDrawStrutAtLength, selectedWidgetKind, strutDrawMode],
+    [activeLayerId, activeTool, camera, drawState, commitStrut, onFocusPoint, placeDrawStrutAtLength, selectedWidgetKind, strutDrawMode],
   );
 
   const handleNodeContextMenu = useCallback(
@@ -489,7 +549,7 @@ export function Scene({
       event.stopPropagation();
       event.nativeEvent.preventDefault();
 
-      setSelectedIds(new Set([nodeId]));
+      setSelectedNodeIds(new Set([nodeId]));
       setSelectedStrutIds(new Set());
       setSelectedPanelIds(new Set());
       setSelectedWidgetIds(new Set());
@@ -504,7 +564,7 @@ export function Scene({
       event.stopPropagation();
       event.nativeEvent.preventDefault();
 
-      setSelectedIds(new Set());
+      setSelectedNodeIds(new Set());
       setSelectedStrutIds(new Set([strutId]));
       setSelectedPanelIds(new Set());
       setSelectedWidgetIds(new Set());
@@ -597,7 +657,7 @@ export function Scene({
           x: Math.round(fromAttach.x + direction.x * (cursor + nodeSize / 2)),
           y: Math.round(fromAttach.y + direction.y * (cursor + nodeSize / 2)),
           z: Math.round(fromAttach.z + direction.z * (cursor + nodeSize / 2)),
-        });
+        }, strut.layerId);
         const nodeIndex = chainNodes.length;
         chainNodes.push({ data: node, existing: false });
         segments.push({ fromIndex: previousIndex, toIndex: nodeIndex, length: part });
@@ -619,7 +679,7 @@ export function Scene({
             x: Math.round(fromAttach.x + direction.x * (cursor + nodeSize / 2)),
             y: Math.round(fromAttach.y + direction.y * (cursor + nodeSize / 2)),
             z: Math.round(fromAttach.z + direction.z * (cursor + nodeSize / 2)),
-          });
+          }, strut.layerId);
           chainNodes.push({ data: node, existing: false });
           segments.push({ fromIndex: previousIndex, toIndex: nodeIndex, length: part });
           previousIndex = nodeIndex;
@@ -641,6 +701,7 @@ export function Scene({
 
           const newStrut: StrutData = {
             id: crypto.randomUUID(),
+            layerId: strut.layerId,
             nodeA: from.data.id,
             faceA: strut.faceA,
             nodeB: to.data.id,
@@ -686,7 +747,7 @@ export function Scene({
       event.stopPropagation();
       event.nativeEvent.preventDefault();
 
-      setSelectedIds(new Set());
+      setSelectedNodeIds(new Set());
       setSelectedStrutIds(new Set());
       setSelectedPanelIds(new Set([panelId]));
       setSelectedWidgetIds(new Set());
@@ -714,7 +775,7 @@ export function Scene({
     (widgetId: string, event: ThreeEvent<MouseEvent>) => {
       event.stopPropagation();
       event.nativeEvent.preventDefault();
-      setSelectedIds(new Set());
+      setSelectedNodeIds(new Set());
       setSelectedStrutIds(new Set());
       setSelectedPanelIds(new Set());
       setSelectedWidgetIds(new Set([widgetId]));
@@ -726,6 +787,20 @@ export function Scene({
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+      if (pasteAssembly) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          onCancelPaste();
+          return;
+        }
+        const axis = e.key.toLowerCase();
+        if (axis === "x" || axis === "y" || axis === "z") {
+          e.preventDefault();
+          setPasteRotation((rotation) => quarterTurn(rotation, axis, e.shiftKey ? -1 : 1));
+        }
+        return;
+      }
 
       const drawShortcut = drawState && strutDrawMode === "straight"
         ? getStructuralDrawShortcut(e.key)
@@ -754,13 +829,13 @@ export function Scene({
 
       if (e.key === "Delete" || e.key === "Backspace") {
         if (
-          selectedIds.size === 0 && selectedStrutIds.size === 0 &&
+          selectedNodeIds.size === 0 && selectedStrutIds.size === 0 &&
           selectedPanelIds.size === 0 && selectedWidgetIds.size === 0
         ) return;
         e.preventDefault();
         setSceneData((prev) => {
           let result = prev;
-          for (const id of selectedIds) {
+          for (const id of selectedNodeIds) {
             result = removeNodeFromScene(result, id);
           }
           for (const id of selectedStrutIds) {
@@ -774,7 +849,7 @@ export function Scene({
           }
           return result;
         });
-        setSelectedIds(new Set());
+        setSelectedNodeIds(new Set());
         setSelectedStrutIds(new Set());
         setSelectedPanelIds(new Set());
         setSelectedWidgetIds(new Set());
@@ -782,7 +857,7 @@ export function Scene({
 
       if (e.key === "Escape") {
         setDrawState(null);
-        setSelectedIds(new Set());
+        setSelectedNodeIds(new Set());
         setSelectedStrutIds(new Set());
         setSelectedPanelIds(new Set());
         setSelectedWidgetIds(new Set());
@@ -834,7 +909,7 @@ export function Scene({
             return prev;
           }
 
-          return addPanelToScene(prev, panel);
+          return addPanelToScene(prev, { ...panel, layerId: activeLayerId });
         });
       }
     };
@@ -842,10 +917,13 @@ export function Scene({
     return () => window.removeEventListener("keydown", handler);
   }, [
     activeTool,
+    activeLayerId,
     drawAxisLock,
     drawState,
     placeDrawStrutAtLength,
-    selectedIds,
+    onCancelPaste,
+    pasteAssembly,
+    selectedNodeIds,
     selectedPanelIds,
     selectedStrutIds,
     selectedWidgetIds,
@@ -889,7 +967,7 @@ export function Scene({
         );
       },
     };
-  }, [selectedIds, selectedStrutIds, selectedPanelIds, selectedWidgetIds, drawState]);
+  }, [selectedNodeIds, selectedStrutIds, selectedPanelIds, selectedWidgetIds, drawState]);
 
   return (
     <group>
@@ -917,7 +995,11 @@ export function Scene({
         />
       )}
 
-      {Object.values(sceneData.panels ?? {}).map((panel) => (
+      {pasteCandidate && (
+        <AssemblyPastePreview sceneData={pasteCandidate} valid={pasteValid} target={pasteTarget} />
+      )}
+
+      {Object.values(sceneData.panels ?? {}).filter(visible).map((panel) => (
         <PanelMesh
           key={panel.id}
           panel={panel}
@@ -938,7 +1020,7 @@ export function Scene({
         />
       )}
 
-      {Object.values(sceneData.widgets ?? {}).map((widget) => (
+      {Object.values(sceneData.widgets ?? {}).filter(visible).map((widget) => (
         <WidgetMesh
           key={widget.id}
           widget={widget}
@@ -951,12 +1033,12 @@ export function Scene({
         />
       ))}
 
-      {Object.values(sceneData.nodes).map((node) => (
+      {Object.values(sceneData.nodes).filter(visible).map((node) => (
         <NodeMesh
           key={node.id}
           node={node}
           sceneData={sceneData}
-          selected={selectedIds.has(node.id)}
+          selected={selectedNodeIds.has(node.id)}
           hovered={hoveredPart === `node:${node.id}`}
           onHoverChange={(hovered) => updateHoveredPart(`node:${node.id}`, hovered)}
           activeTool={activeTool}
@@ -968,7 +1050,7 @@ export function Scene({
         />
       ))}
 
-      {Object.values(sceneData.struts).map((strut) => (
+      {Object.values(sceneData.struts).filter(visible).map((strut) => (
         <StrutMesh
           key={strut.id}
           strut={strut}
@@ -981,6 +1063,75 @@ export function Scene({
         />
       ))}
 
+    </group>
+  );
+}
+
+function AssemblyPastePreview({
+  sceneData,
+  valid,
+  target,
+}: {
+  sceneData: SceneData;
+  valid: boolean;
+  target: Vec3 | null;
+}) {
+  const color = valid ? "#4ecca3" : "#e94560";
+  return (
+    <group>
+      {Object.values(sceneData.panels).map((panel) => (
+        <PanelPreviewMesh
+          key={panel.id}
+          sceneData={sceneData}
+          strutIds={panel.strutIds}
+          side={panel.side ?? "top"}
+          color={color}
+        />
+      ))}
+      {Object.values(sceneData.struts).map((strut) => (
+        <StrutMesh
+          key={strut.id}
+          strut={strut}
+          sceneData={sceneData}
+          selected={false}
+          hovered={false}
+          previewColor={color}
+          onHoverChange={() => undefined}
+          onClick={() => undefined}
+          onContextMenu={() => undefined}
+        />
+      ))}
+      {Object.values(sceneData.nodes).map((node) => (
+        <mesh key={node.id} position={[node.position.x, node.position.y, node.position.z]} raycast={() => null}>
+          <boxGeometry args={[nodeSize, nodeSize, nodeSize]} />
+          <meshStandardMaterial color={color} transparent opacity={0.55} depthWrite={false} />
+          <Edges color={color} />
+        </mesh>
+      ))}
+      {Object.values(sceneData.widgets).map((widget) => {
+        const position = getAttachmentWorldPosition(sceneData, widget.nodeId, widget.face);
+        return (
+          <mesh key={widget.id} position={[position.x, position.y, position.z]} raycast={() => null}>
+            <sphereGeometry args={[0.34, 10, 8]} />
+            <meshStandardMaterial color={color} transparent opacity={0.6} depthWrite={false} />
+          </mesh>
+        );
+      })}
+      {target && (
+        <Html position={[target.x, target.y + 1.2, target.z]} center style={{ pointerEvents: "none" }}>
+          <div style={{
+            whiteSpace: "nowrap",
+            padding: "5px 8px",
+            borderRadius: 4,
+            background: "rgba(11, 29, 53, 0.9)",
+            border: `1px solid ${color}`,
+            color: valid ? "#d7fff4" : "#ffd5dc",
+            fontSize: 11,
+          }}>
+            {valid ? "Click to place" : "Placement blocked"} · X/Y/Z rotate · Esc cancel
+          </div>
+        </Html>
+      )}
     </group>
   );
 }
@@ -1501,6 +1652,7 @@ interface StrutMeshProps {
   onHoverChange: (hovered: boolean) => void;
   onClick: (strutId: string, point: THREE.Vector3, event: ThreeEvent<MouseEvent>) => void;
   onContextMenu: (strutId: string, event: ThreeEvent<MouseEvent>) => void;
+  previewColor?: string;
 }
 
 function PanelMesh({
@@ -1554,10 +1706,12 @@ function PanelPreviewMesh({
   sceneData,
   strutIds,
   side,
+  color = "#7de2c4",
 }: {
   sceneData: SceneData;
   strutIds: string[];
   side: "top" | "bottom";
+  color?: string;
 }) {
   const geometry = useMemo(
     () => createPanelBufferGeometry(sceneData, strutIds, side),
@@ -1569,7 +1723,7 @@ function PanelPreviewMesh({
   return (
     <mesh geometry={geometry} renderOrder={2} raycast={() => null}>
       <meshStandardMaterial
-        color="#7de2c4"
+        color={color}
         transparent
         opacity={0.42}
         depthWrite={false}
@@ -1644,6 +1798,7 @@ function WidgetMesh({
       {widget.kind === "antenna" && <AntennaWidget color={color} hovered={hovered} />}
       {widget.kind === "rocket-engine" && <RocketEngineWidget color={color} hovered={hovered} />}
       {widget.kind === "cockpit" && <CockpitWidget color={color} hovered={hovered} />}
+      {widget.kind === "wheel" && <WheelWidget color={color} hovered={hovered} />}
     </group>
   );
 }
@@ -1699,6 +1854,39 @@ function CockpitWidget({ color, hovered }: { color: string; hovered: boolean }) 
   );
 }
 
+function WheelWidget({ color, hovered }: { color: string; hovered: boolean }) {
+  const wheelCenter = WHEEL_GEOMETRY.axleExtension + WHEEL_GEOMETRY.width / 2;
+  return (
+    <group>
+      <mesh position={[0, WHEEL_GEOMETRY.axleExtension / 2, 0]} castShadow>
+        <cylinderGeometry args={[
+          WHEEL_GEOMETRY.axleRadius,
+          WHEEL_GEOMETRY.axleRadius,
+          WHEEL_GEOMETRY.axleExtension,
+          WHEEL_GEOMETRY.radialSegments,
+        ]} />
+        <meshStandardMaterial color={color} metalness={0.35} roughness={0.4} />
+        <HoverEdges visible={hovered} />
+      </mesh>
+      <mesh position={[0, wheelCenter, 0]} castShadow>
+        <cylinderGeometry args={[
+          WHEEL_GEOMETRY.radius,
+          WHEEL_GEOMETRY.radius,
+          WHEEL_GEOMETRY.width,
+          WHEEL_GEOMETRY.radialSegments,
+        ]} />
+        <meshStandardMaterial color="#26343d" roughness={0.82} />
+        <HoverEdges visible={hovered} />
+      </mesh>
+      <mesh position={[0, wheelCenter, 0]} castShadow>
+        <cylinderGeometry args={[0.62, 0.62, WHEEL_GEOMETRY.width + 0.04, 20]} />
+        <meshStandardMaterial color={color} metalness={0.25} roughness={0.38} />
+        <HoverEdges visible={hovered} />
+      </mesh>
+    </group>
+  );
+}
+
 function StrutMesh({
   strut,
   sceneData,
@@ -1707,6 +1895,7 @@ function StrutMesh({
   onHoverChange,
   onClick,
   onContextMenu,
+  previewColor,
 }: StrutMeshProps) {
   const nodeA = sceneData.nodes[strut.nodeA];
   const nodeB = sceneData.nodes[strut.nodeB];
@@ -1753,6 +1942,7 @@ function StrutMesh({
     <mesh
       geometry={geometry}
       castShadow
+      raycast={previewColor ? () => null : undefined}
       onClick={(event) => onClick(strut.id, event.point.clone(), event)}
       onContextMenu={(event) => onContextMenu(strut.id, event)}
       onPointerOver={(event) => {
@@ -1761,7 +1951,13 @@ function StrutMesh({
       }}
       onPointerOut={() => onHoverChange(false)}
     >
-      <meshStandardMaterial color={color} flatShading={true} />
+      <meshStandardMaterial
+        color={previewColor ?? color}
+        flatShading={true}
+        transparent={Boolean(previewColor)}
+        opacity={previewColor ? 0.55 : 1}
+        depthWrite={!previewColor}
+      />
       <HoverEdges visible={hovered} />
     </mesh>
   );

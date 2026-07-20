@@ -21,8 +21,13 @@ Strutz is an experimental 3D construction editor for building node-and-strut ass
 - Select any part with right-click and extend the selection with `Shift`+left-click.
 - Delete selected parts with `Delete` or `Backspace`; placed nodes are not repositionable.
 - Undo/redo scene edits.
+- Organize parts into named layers from the right sidebar; each layer can be shown or hidden without changing construction or export behavior.
+- Select a layer's contents or move the current multi-part selection into the active layer.
+- Copy selected assemblies with `Ctrl`/`Cmd`+`C`; required panel boundaries, strut endpoints, and widget host nodes are included automatically.
+- Paste with `Ctrl`/`Cmd`+`V`, rotate the placement preview in 90-degree steps, and click the ground grid to commit a collision-free copy.
 - Save/open scenes as JSON.
 - Export scenes as JSON, OBJ, or glTF.
+- Export slicer-ready ASCII STL as one weldable structural mesh at a configurable millimeter scale.
 - Orbit the camera with left-drag, middle-drag, or the viewport gizmo.
 - Re-center the camera on selected parts while preserving the current view offset.
 - Toggle automatic camera follow independently of selection.
@@ -73,11 +78,17 @@ npm run typecheck
 - `Ctrl+Z`: Undo
 - `Ctrl+Shift+Z`/`Ctrl+Y`: Redo
 - `Ctrl+S`: Save JSON
+- `Ctrl`/`Cmd`+`C`: Copy the selected assembly
+- `Ctrl`/`Cmd`+`V`: Preview a pasted assembly at the ground grid
+- During paste preview, `X`/`Y`/`Z`: Rotate +90° around that world axis
+- During paste preview, `Shift+X`/`Shift+Y`/`Shift+Z`: Rotate −90° around that world axis
 - `P`: Snap a panel into the next available face of a selected closed strut loop
 - `F`: Flip selected panels between their top and bottom faces
 - `R`: Rotate selected widgets by 90 degrees around their attachment face
 - `O`: Toggle perspective/orthographic camera
 - `Delete`/`Backspace`: Delete selected nodes, struts, panels, or widgets
+
+For 3D printing, use **File → Export Printable STL**. The default scale is 2 mm per construction unit; the export dialog previews the resulting node-bound dimensions before writing the file. OBJ and glTF remain render/interchange exports and intentionally use open connection geometry.
 
 ## Construction Rules
 
@@ -95,7 +106,9 @@ The formal domain contract, including terminology, validation APIs, and edge cas
 - Boundary struts contribute panel-facing inward planes; planar corners use their main diagonal run because their endpoint stubs terminate inside nodes. Coplanar loops use their shared support plane, while folded loops derive exposed planes from local strut faces.
 - Invalid or concave loops are rejected instead of producing a warped triangle fan; concave openings should be divided into multiple panel loops.
 - Each closed strut loop accepts one panel on each side, allowing an enclosed box to be built from four struts and four nodes.
-- Widgets snap to a free node face. Antennas, rocket engines, and cockpits point outward and can rotate in quarter turns.
+- Widgets snap to a free node face. Antennas, rocket engines, cockpits, and wheels point outward and can rotate in quarter turns. Wheels are 4 units in diameter and 2 units wide, beginning after a 0.5-unit axle extension.
+- Widget placement, rotation, and assembly pasting reject overlapping widget collision volumes while allowing tangential contact.
+- Hidden layers remain structurally active and are included in OBJ and glTF exports.
 
 ## Notes
 

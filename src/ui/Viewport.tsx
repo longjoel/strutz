@@ -16,6 +16,7 @@ import type { SceneData, WidgetKind } from "../core/types";
 import { Scene } from "./Scene";
 import { matchCameraView, moveOrbitFocus, type CameraMode } from "./camera";
 import { CONSTRUCTION_GRID_Y } from "./viewportConfig";
+import type { AssemblyClipboard } from "../core/composition";
 
 interface ViewportProps {
   activeTool: Tool;
@@ -30,6 +31,14 @@ interface ViewportProps {
   setSelectedStrutIds: Dispatch<SetStateAction<Set<string>>>;
   selectedPanelIds: Set<string>;
   setSelectedPanelIds: Dispatch<SetStateAction<Set<string>>>;
+  selectedNodeIds: Set<string>;
+  setSelectedNodeIds: Dispatch<SetStateAction<Set<string>>>;
+  selectedWidgetIds: Set<string>;
+  setSelectedWidgetIds: Dispatch<SetStateAction<Set<string>>>;
+  activeLayerId: string;
+  pasteAssembly: AssemblyClipboard | null;
+  onCancelPaste: () => void;
+  onCommitPaste: (assembly: SceneData) => void;
   panelPreviewSide: "top" | "bottom" | null;
 }
 
@@ -46,6 +55,14 @@ export function Viewport({
   setSelectedStrutIds,
   selectedPanelIds,
   setSelectedPanelIds,
+  selectedNodeIds,
+  setSelectedNodeIds,
+  selectedWidgetIds,
+  setSelectedWidgetIds,
+  activeLayerId,
+  pasteAssembly,
+  onCancelPaste,
+  onCommitPaste,
   panelPreviewSide,
 }: ViewportProps) {
   const [perspectiveCamera, setPerspectiveCamera] = useState<THREE.PerspectiveCamera | null>(null);
@@ -162,6 +179,14 @@ export function Viewport({
           setSelectedStrutIds={setSelectedStrutIds}
           selectedPanelIds={selectedPanelIds}
           setSelectedPanelIds={setSelectedPanelIds}
+          selectedNodeIds={selectedNodeIds}
+          setSelectedNodeIds={setSelectedNodeIds}
+          selectedWidgetIds={selectedWidgetIds}
+          setSelectedWidgetIds={setSelectedWidgetIds}
+          activeLayerId={activeLayerId}
+          pasteAssembly={pasteAssembly}
+          onCancelPaste={onCancelPaste}
+          onCommitPaste={onCommitPaste}
           panelPreviewSide={panelPreviewSide}
         />
 

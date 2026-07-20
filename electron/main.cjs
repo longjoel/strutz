@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, Menu, dialog, ipcMain, clipboard } = require("electron");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 
@@ -91,6 +91,10 @@ function buildMenu() {
           label: "Export glTF...",
           click: () => sendMenuCommand("export-gltf"),
         },
+        {
+          label: "Export Printable STL...",
+          click: () => sendMenuCommand("export-stl"),
+        },
         { type: "separator" },
         isMac ? { role: "close" } : { role: "quit" },
       ],
@@ -110,8 +114,16 @@ function buildMenu() {
         },
         { type: "separator" },
         { role: "cut" },
-        { role: "copy" },
-        { role: "paste" },
+        {
+          label: "Copy",
+          accelerator: "CmdOrCtrl+C",
+          click: () => sendMenuCommand("copy"),
+        },
+        {
+          label: "Paste",
+          accelerator: "CmdOrCtrl+V",
+          click: () => sendMenuCommand("paste"),
+        },
         { role: "selectAll" },
       ],
     },
@@ -136,6 +148,12 @@ function buildMenu() {
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
+
+ipcMain.handle("clipboard:write-text", (_event, text) => {
+  clipboard.writeText(typeof text === "string" ? text : "");
+});
+
+ipcMain.handle("clipboard:read-text", () => clipboard.readText());
 
 ipcMain.handle("dialog:open-scene", async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
@@ -188,10 +206,18 @@ ipcMain.handle("file:export-scene", async (_event, payload) => {
     ? [{ name: "Wavefront OBJ", extensions: ["obj"] }]
     : payload.type === "gltf"
       ? [{ name: "glTF", extensions: ["gltf"] }]
+      : payload.type === "stl"
+        ? [{ name: "Printable STL", extensions: ["stl"] }]
       : [{ name: "JSON", extensions: ["json"] }];
 
   const result = await dialog.showSaveDialog(mainWindow, {
-    title: payload.type === "obj" ? "Export OBJ" : payload.type === "gltf" ? "Export glTF" : "Export JSON",
+    title: payload.type === "obj"
+      ? "Export OBJ"
+      : payload.type === "gltf"
+        ? "Export glTF"
+        : payload.type === "stl"
+          ? "Export Printable STL"
+          : "Export JSON",
     defaultPath: payload.fileName,
     filters,
   });

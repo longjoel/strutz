@@ -1,23 +1,22 @@
-import { CURRENT_SCENE_VERSION, nodeSize, strutWidth } from "./constants";
+import { CURRENT_SCENE_VERSION, DEFAULT_LAYER_ID, nodeSize, strutWidth, WHEEL_GEOMETRY } from "./constants";
 import { createNode, getPanelBrushGeometry } from "./scene";
 import {
-  cross,
-  faceNormal,
   getAttachmentPosition,
   getCorner45PlaneNormal,
   getStrutRoutePoints,
   isCornerStrutKind,
-  normalize,
   scale,
 } from "./rules";
 import type { FaceName, SceneData, Vec3, WidgetData } from "./types";
-import { createBoxSurface, createStrutSurface, type QuadSurface } from "./geometry";
+import { createBoxSurface, createRadialProfileSurface, createStrutSurface, type QuadSurface } from "./geometry";
+import { getWidgetAxes } from "./widgetGeometry";
 
 export function createRootScene(): SceneData {
   const root = createNode({ x: 0, y: 0, z: 0 });
   return {
     schemaVersion: CURRENT_SCENE_VERSION,
-    nodes: { [root.id]: root },
+    layers: [{ id: DEFAULT_LAYER_ID, name: "Default", visible: true }],
+    nodes: { [root.id]: { ...root, layerId: DEFAULT_LAYER_ID } },
     struts: {},
     panels: {},
     widgets: {},
@@ -204,22 +203,30 @@ function addWidgetToObj(builder: ObjBuilder, widget: WidgetData, nodePosition: V
       builder.addOrientedBox(center(0, 0.32, 0), axes.x, axes.y, axes.z, 0.8, 0.64, 0.72);
       builder.addOrientedBox(center(0, 0.67, 0.08), axes.x, axes.y, axes.z, 0.62, 0.34, 0.5);
       break;
+    case "wheel": {
+      const surface = createRadialProfileSurface(
+        anchor,
+        axes.x,
+        axes.y,
+        axes.z,
+        wheelProfile(),
+        WHEEL_GEOMETRY.radialSegments,
+      );
+      builder.addTriangleMesh(surface.vertices, surface.indices);
+      break;
+    }
   }
 }
 
-function getWidgetAxes(face: FaceName, rotation: number): { x: Vec3; y: Vec3; z: Vec3 } {
-  const y = faceNormal(face);
-  const reference = Math.abs(y.y) > 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
-  const baseX = normalize(cross(reference, y));
-  const baseZ = normalize(cross(y, baseX));
-  const angle = (rotation % 4) * Math.PI / 2;
-  const cos = Math.cos(angle);
-  const sin = Math.sin(angle);
-  return {
-    x: add(scale(baseX, cos), scale(baseZ, sin)),
-    y,
-    z: add(scale(baseZ, cos), scale(baseX, -sin)),
-  };
+function wheelProfile(): Array<{ offset: number; radius: number }> {
+  const wheelStart = WHEEL_GEOMETRY.axleExtension;
+  const wheelEnd = wheelStart + WHEEL_GEOMETRY.width;
+  return [
+    { offset: 0, radius: WHEEL_GEOMETRY.axleRadius },
+    { offset: wheelStart, radius: WHEEL_GEOMETRY.axleRadius },
+    { offset: wheelStart, radius: WHEEL_GEOMETRY.radius },
+    { offset: wheelEnd, radius: WHEEL_GEOMETRY.radius },
+  ];
 }
 
 function add(a: Vec3, b: Vec3): Vec3 {

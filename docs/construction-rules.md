@@ -72,7 +72,10 @@ Use `validatePanelPlacement` before placement. Omitting its `side` argument asks
 
 1. The target node exists and its target face is free.
 2. Rotation is stored as quarter turns around the attachment-face normal.
-3. Removing the target node removes its widgets.
+3. Each widget kind provides one or more renderer-independent oriented collision boxes fitted to its component volumes.
+4. A candidate placement or rotation is rejected when any of its boxes has positive-volume overlap with an existing widget box. Tangential contact is allowed.
+5. Pasted assemblies are checked against existing widgets and internally against the other widgets in the paste.
+6. Removing the target node removes its widgets.
 
 Use `validateWidgetPlacement` before placement.
 

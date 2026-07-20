@@ -8,9 +8,11 @@ import {
   isValidPlanarCornerFootprint,
   isValidStrutLength,
   length,
+  getAttachmentPosition,
   sub,
 } from "./rules";
 import type { FaceName, NodeData, SceneData, StrutKind, Vec3, WidgetData } from "./types";
+import { collisionBoxesOverlap, getWidgetCollisionBoxes } from "./widgetGeometry";
 
 export type PlacementResult<TReason extends string> =
   | { valid: true }
@@ -29,7 +31,7 @@ export type StrutPlacementIssue =
   | "strut-intersection"
   | "invalid-corner-footprint";
 
-export type WidgetPlacementIssue = "missing-node" | "occupied-face";
+export type WidgetPlacementIssue = "missing-node" | "occupied-face" | "widget-collision";
 
 export interface StrutConnection {
   nodeA: string;
@@ -138,13 +140,33 @@ export function validateStrutPlacement(
 
 export function validateWidgetPlacement(
   scene: SceneData,
-  widget: Pick<WidgetData, "nodeId" | "face">,
+  widget: Pick<WidgetData, "kind" | "nodeId" | "face" | "rotation"> & { id?: string },
 ): PlacementResult<WidgetPlacementIssue> {
   const node = scene.nodes[widget.nodeId];
   if (!node) return { valid: false, reason: "missing-node" };
-  return node.attachments[widget.face]?.occupied
-    ? { valid: false, reason: "occupied-face" }
-    : { valid: true };
+  const attachment = node.attachments[widget.face];
+  if (attachment?.occupied && attachment.occupantId !== widget.id) {
+    return { valid: false, reason: "occupied-face" };
+  }
+
+  const candidateBoxes = getWidgetCollisionBoxes(
+    widget,
+    getAttachmentPosition(node.position, widget.face),
+  );
+  for (const existing of Object.values(scene.widgets ?? {})) {
+    if (existing.id === widget.id) continue;
+    const existingNode = scene.nodes[existing.nodeId];
+    if (!existingNode) continue;
+    const existingBoxes = getWidgetCollisionBoxes(
+      existing,
+      getAttachmentPosition(existingNode.position, existing.face),
+    );
+    if (candidateBoxes.some((candidate) => existingBoxes.some((box) =>
+      collisionBoxesOverlap(candidate, box)))) {
+      return { valid: false, reason: "widget-collision" };
+    }
+  }
+  return { valid: true };
 }
 
 /** Return the grid position for a new straight-strut endpoint. */

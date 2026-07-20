@@ -1,6 +1,7 @@
 import type { FaceName } from "./types";
 
-export const CURRENT_SCENE_VERSION = 1;
+export const CURRENT_SCENE_VERSION = 2;
+export const DEFAULT_LAYER_ID = "default";
 
 /** The construction catalog. Add future size families here, not in UI code. */
 export const CONSTRUCTION_RULES = {
@@ -16,6 +17,14 @@ export const PHYSICAL_SCALE = {
   referenceStrutLength: 3,
   referenceMeters: 2,
   metersPerConstructionUnit: 2 / 3,
+} as const;
+
+export const WHEEL_GEOMETRY = {
+  radius: 2,
+  width: 2,
+  axleExtension: 0.5,
+  axleRadius: 0.25,
+  radialSegments: 32,
 } as const;
 
 export const GRID_SIZE = CONSTRUCTION_RULES.gridSize;

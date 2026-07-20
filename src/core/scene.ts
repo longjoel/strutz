@@ -10,7 +10,7 @@ import type {
   StrutKind,
   Attachments,
 } from "./types";
-import { CURRENT_SCENE_VERSION, oppositeFace, strutWidth } from "./constants";
+import { CURRENT_SCENE_VERSION, DEFAULT_LAYER_ID, oppositeFace, strutWidth } from "./constants";
 import {
   faceNormal,
   getAttachmentPosition,
@@ -40,9 +40,10 @@ import {
   type PanelBrushSegment,
 } from "./brush";
 
-export function createNode(position: Vec3): NodeData {
+export function createNode(position: Vec3, layerId?: string): NodeData {
   return {
     id: crypto.randomUUID(),
+    layerId,
     position: { ...position },
     attachments: createEmptyAttachments(),
   };
@@ -79,11 +80,17 @@ export function normalizeSceneAttachments(scene: SceneData): SceneData {
       rotation: accessory.rotation,
     };
   }
+  const layers = normalizeLayers(scene.layers);
+  const validLayerIds = new Set(layers.map((layer) => layer.id));
+  const layerId = (candidate?: string) => validLayerIds.has(candidate ?? "")
+    ? candidate
+    : DEFAULT_LAYER_ID;
   const nodes: Record<string, NodeData> = {};
 
   for (const [id, node] of Object.entries(scene.nodes)) {
     nodes[id] = {
       ...node,
+      layerId: layerId(node.layerId),
       attachments: createEmptyAttachments(),
     };
   }
@@ -132,11 +139,40 @@ export function normalizeSceneAttachments(scene: SceneData): SceneData {
 
   return {
     ...currentScene,
-    schemaVersion: scene.schemaVersion ?? CURRENT_SCENE_VERSION,
+    schemaVersion: CURRENT_SCENE_VERSION,
+    layers,
     nodes,
-    panels: scene.panels ?? {},
-    widgets,
+    struts: Object.fromEntries(Object.entries(scene.struts).map(([id, strut]) => [
+      id,
+      { ...strut, layerId: layerId(strut.layerId) },
+    ])),
+    panels: Object.fromEntries(Object.entries(scene.panels ?? {}).map(([id, panel]) => [
+      id,
+      { ...panel, layerId: layerId(panel.layerId) },
+    ])),
+    widgets: Object.fromEntries(Object.entries(widgets).map(([id, widget]) => [
+      id,
+      { ...widget, layerId: layerId(widget.layerId) },
+    ])),
   };
+}
+
+function normalizeLayers(layers?: SceneData["layers"]): NonNullable<SceneData["layers"]> {
+  const seen = new Set<string>();
+  const normalized = (layers ?? []).filter((layer) => {
+    if (!layer?.id || seen.has(layer.id)) return false;
+    seen.add(layer.id);
+    return true;
+  }).map((layer) => ({
+    id: layer.id,
+    name: layer.name.trim() || "Layer",
+    visible: layer.visible !== false,
+  }));
+  const defaultLayer = normalized.find((layer) => layer.id === DEFAULT_LAYER_ID);
+  return [
+    defaultLayer ?? { id: DEFAULT_LAYER_ID, name: "Default", visible: true },
+    ...normalized.filter((layer) => layer.id !== DEFAULT_LAYER_ID),
+  ];
 }
 
 export function addNodeToScene(scene: SceneData, node: NodeData): SceneData {
@@ -175,6 +211,7 @@ export function removeNodeFromScene(scene: SceneData, nodeId: string): SceneData
   }
 
   return normalizeSceneAttachments({
+    ...scene,
     nodes: newNodes,
     struts: newStruts,
     panels: newPanels,
@@ -222,6 +259,7 @@ export function addStraightStrutRunsToScene(
   sourceNodeIds: string[],
   fromFace: FaceName,
   strutLength: number,
+  layerId?: string,
 ): SceneData {
   let result = scene;
   for (const sourceNodeId of sourceNodeIds) {
@@ -246,7 +284,7 @@ export function addStraightStrutRunsToScene(
         samePosition(node.position, position));
       if (existingNode) continue;
       if (!validateNodePlacement(result, position).valid) return scene;
-      result = addNodeToScene(result, createNode(position));
+      result = addNodeToScene(result, createNode(position, layerId));
     }
 
     for (const crossedStrut of crossedStruts) {
@@ -255,12 +293,13 @@ export function addStraightStrutRunsToScene(
         crossedStrut.nodeA,
         crossedStrut.faceA,
         crossedStrut.length,
+        crossedStrut.layerId,
       );
       if (!rebuilt) return scene;
       result = rebuilt;
     }
 
-    const placed = materializeStraightRun(result, sourceNodeId, fromFace, strutLength);
+    const placed = materializeStraightRun(result, sourceNodeId, fromFace, strutLength, layerId);
     if (!placed) return scene;
     result = placed;
   }
@@ -273,6 +312,7 @@ function materializeStraightRun(
   sourceNodeId: string,
   fromFace: FaceName,
   strutLength: number,
+  layerId?: string,
 ): SceneData | null {
   const plan = planStraightStrutRun(scene, sourceNodeId, fromFace, strutLength);
   if (!plan) return null;
@@ -282,7 +322,7 @@ function materializeStraightRun(
     if (plannedNode.existingNodeId) {
       return result.nodes[plannedNode.existingNodeId];
     }
-    const newNode = createNode(plannedNode.position);
+    const newNode = createNode(plannedNode.position, layerId);
     result = addNodeToScene(result, newNode);
     return newNode;
   });
@@ -295,6 +335,7 @@ function materializeStraightRun(
     if (!fromNode || !toNode) return null;
     const strut: StrutData = {
       id: crypto.randomUUID(),
+      layerId,
       nodeA: fromNode.id,
       faceA: fromFace,
       nodeB: toNode.id,
@@ -671,11 +712,14 @@ export function rotateWidgetInScene(scene: SceneData, widgetId: string): SceneDa
   const widget = scene.widgets?.[widgetId];
   if (!widget) return scene;
 
+  const rotated = { ...widget, rotation: (widget.rotation + 1) % 4 };
+  if (!validateWidgetPlacement(scene, rotated).valid) return scene;
+
   return normalizeSceneAttachments({
     ...scene,
     widgets: {
       ...scene.widgets,
-      [widgetId]: { ...widget, rotation: (widget.rotation + 1) % 4 },
+      [widgetId]: rotated,
     },
   });
 }
@@ -685,6 +729,7 @@ function legacyWidgetKind(definitionId: string): WidgetKind | null {
     case "antenna":
     case "rocket-engine":
     case "cockpit":
+    case "wheel":
       return definitionId;
     default:
       return null;

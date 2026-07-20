@@ -54,6 +54,25 @@ describe("widget rules", () => {
     expect(rotateWidgetInScene(scene, "engine").widgets.engine.rotation).toBe(0);
   });
 
+  it("rejects overlapping widget volumes while allowing them to touch", () => {
+    const overlapping = twoNodeScene(3);
+    const withFirst = addWidgetToScene(overlapping, wheel("first", "a"));
+    const rejected = addWidgetToScene(withFirst, wheel("second", "b"));
+    expect(rejected.widgets.second).toBeUndefined();
+
+    const touching = twoNodeScene(4);
+    const touchingFirst = addWidgetToScene(touching, wheel("first", "a"));
+    const accepted = addWidgetToScene(touchingFirst, wheel("second", "b"));
+    expect(accepted.widgets.second).toBeDefined();
+
+    const mixed = twoNodeScene(2);
+    const mixedFirst = addWidgetToScene(mixed, wheel("wheel", "a"));
+    const mixedRejected = addWidgetToScene(mixedFirst, {
+      id: "antenna", kind: "antenna", nodeId: "b", face: "top", rotation: 0,
+    });
+    expect(mixedRejected.widgets.antenna).toBeUndefined();
+  });
+
   it("migrates recognized legacy accessories into widgets", () => {
     const scene = widgetScene();
     const migrated = normalizeSceneAttachments({
@@ -79,6 +98,7 @@ describe("widget rules", () => {
       ["antenna", "antenna", "top"],
       ["engine", "rocket-engine", "front"],
       ["cockpit", "cockpit", "right"],
+      ["wheel", "wheel", "bottom"],
     ] as const) {
       scene = addWidgetToScene(scene, { id, kind, nodeId: "node", face, rotation: 0 });
     }
@@ -87,6 +107,7 @@ describe("widget rules", () => {
     expect(obj).toContain("o widget_antenna_antenna");
     expect(obj).toContain("o widget_rocket-engine_engine");
     expect(obj).toContain("o widget_cockpit_cockpit");
+    expect(obj).toContain("o widget_wheel_wheel");
   });
 });
 
@@ -98,4 +119,19 @@ function widgetScene(): SceneData {
     panels: {},
     widgets: {},
   };
+}
+
+function twoNodeScene(distance: number): SceneData {
+  const a = createNode({ x: 0, y: 0, z: 0 });
+  const b = createNode({ x: distance, y: 0, z: 0 });
+  return normalizeSceneAttachments({
+    nodes: { a: { ...a, id: "a" }, b: { ...b, id: "b" } },
+    struts: {},
+    panels: {},
+    widgets: {},
+  });
+}
+
+function wheel(id: string, nodeId: string): WidgetData {
+  return { id, kind: "wheel", nodeId, face: "top", rotation: 0 };
 }
