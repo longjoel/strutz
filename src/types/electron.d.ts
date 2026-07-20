@@ -7,6 +7,7 @@ type StrutzMenuCommand =
   | "export-obj"
   | "export-gltf"
   | "export-stl"
+  | "export-godot"
   | "undo"
   | "redo"
   | "copy"
@@ -42,6 +43,10 @@ interface StrutzElectronApi {
     fileName: string;
     text: string;
     type: "json" | "obj" | "gltf" | "stl";
+  }): Promise<ExportSceneResult>;
+  exportBundle(payload: {
+    fileName: string;
+    bytes: Uint8Array;
   }): Promise<ExportSceneResult>;
   writeClipboardText(text: string): Promise<void>;
   readClipboardText(): Promise<string>;

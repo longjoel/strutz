@@ -23,6 +23,7 @@ export function AppBar({
   canSelectLoop,
   onSelectLoop,
   onPreviewPanel,
+  onExportGodot,
 }: {
   fileName: string;
   status?: string | null;
@@ -45,6 +46,7 @@ export function AppBar({
   canSelectLoop: boolean;
   onSelectLoop: () => void;
   onPreviewPanel: (side: "top" | "bottom" | null) => void;
+  onExportGodot: () => void;
 }) {
   const stats = [
     ["Nodes", Object.keys(scene.nodes).length],
@@ -142,6 +144,7 @@ export function AppBar({
         )}
       </div>
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
+        <ActionButton text="Godot" disabled={false} onClick={onExportGodot} />
         {stats.map(([label, count]) => (
           <div key={label} style={{ display: "flex", alignItems: "baseline", gap: 4 }} title={label}>
             <span style={{ color: "#86a0ba", fontSize: 11 }}>{label[0]}</span>

@@ -3,6 +3,7 @@ import {
   CURRENT_SCENE_VERSION,
   DEFAULT_LAYER_ID,
   DEFAULT_PHYSICS_SETTINGS,
+  DEFAULT_VEHICLE_RUNTIME_SETTINGS,
   ENGINE_GEOMETRY,
   nodeSize,
   REPULSOR_GEOMETRY,
@@ -32,6 +33,7 @@ export function createRootScene(): SceneData {
     panels: {},
     widgets: {},
     physics: { ...DEFAULT_PHYSICS_SETTINGS },
+    runtime: { ...DEFAULT_VEHICLE_RUNTIME_SETTINGS },
   };
 }
 

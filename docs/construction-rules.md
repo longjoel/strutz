@@ -87,6 +87,12 @@ Main engines have a 4-unit-diameter, 2-unit-long cylindrical body followed by a 
 
 Nodes may carry an individual `massKg`; otherwise `physics.defaultNodeMassKg` is used. Structural struts and panels use `physics.materialDensityKgPerM3`, with `physics.panelThicknessUnits` supplying thickness for surface panels. Widgets may override `massKg`; otherwise their collision-box volumes use the same effective density. `calculateMassProperties` returns total mass plus center of mass in construction units and meters.
 
+## Godot vehicle export
+
+Godot vehicle coordinates are centered on calculated center of mass. The primary cockpit maps its forward/up axes to Godot local `-Z`/`+Y`; if no cockpit exists, editor front/top supply those axes. The exporter creates one capability-based `RigidBody3D`, convex compound collision shapes, force points, custom raycast wheels, outward repulsor raycasts, and an inactive cockpit camera. Hidden layers remain packaged and retain their initial visual visibility.
+
+Runtime commands are normalized and API-only; exports never modify a host project's InputMap. All wheels steer, drive, and brake by default, with per-wheel overrides stored on `WidgetData.runtime`.
+
 Use `validateWidgetPlacement` before placement.
 
 ## Mutation and persistence invariants

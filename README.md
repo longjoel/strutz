@@ -90,6 +90,10 @@ npm run typecheck
 
 For 3D printing, use **File → Export Printable STL**. The default scale is 2 mm per construction unit; the export dialog previews the resulting node-bound dimensions before writing the file. OBJ and glTF remain render/interchange exports and intentionally use open connection geometry.
 
+For a playable physics asset, use **File → Export Godot Vehicle Bundle** or the **Godot** button. The ZIP expands into `vehicles/<name>/` and contains a Godot 4.7 PackedScene, structured GLB, compound collision shapes, mass/center-of-mass configuration, component resources, controller scripts, manifest, and integration README. Copy the `vehicles` folder into a Godot project and instantiate the generated `.tscn`.
+
+The generated `RigidBody3D` accepts an API-only normalized command dictionary through `apply_command()`: `linear` (right/up/forward), `angular` (pitch/yaw/roll), `drive`, `steering`, `brake`, `handbrake`, and `repulsors_enabled`. It emits readiness, capability, grounded, wheel/repulsor contact, and body-contact signals. The cockpit camera is included but remains inactive until `activate_camera()` is called.
+
 ## Construction Rules
 
 The formal domain contract, including terminology, validation APIs, and edge cases, is in [docs/construction-rules.md](docs/construction-rules.md). See [docs/architecture.md](docs/architecture.md) before extending the editor.
@@ -111,6 +115,7 @@ The formal domain contract, including terminology, validation APIs, and edge cas
 - Main engines use a wheel-sized 4-unit-diameter, 2-unit-long body plus a 1.25-unit flared exhaust funnel. Compact thrusters remain the maneuvering and stabilization option.
 - Cockpits use a roughly conical 3-unit (2-meter) body. The nose points forward along the attachment normal, a dark raised viewport marks the rolled up direction, and a named camera lens identifies the future runtime camera mount in OBJ/glTF exports.
 - Physics-ready scene data can store `massKg` on individual nodes/widgets and scene-level material density, default node mass, and panel thickness. `calculateMassProperties` derives total mass and center of mass in construction units and meters for runtime export.
+- The Godot Physics inspector exposes global acceleration/hover defaults plus selected node mass and widget behavior overrides. Wheels default to steering, driven, and braking; individual roles can be disabled before export.
 - Widget placement, rotation, and assembly pasting reject overlapping widget collision volumes while allowing tangential contact.
 - Hidden layers remain structurally active and are included in OBJ and glTF exports.
 

@@ -40,6 +40,7 @@ import {
 } from "../core/composition";
 import { exportSceneStl } from "../core/exportStl";
 import { PrintExportDialog } from "./PrintExportDialog";
+import { RuntimePanel } from "./RuntimePanel";
 
 interface HistoryState {
   past: SceneData[];
@@ -409,6 +410,21 @@ export function App() {
     setPrintExportOpen(true);
   }, []);
 
+  const exportGodot = useCallback(async () => {
+    try {
+      const { exportGodotVehicleBundle } = await import("./exportGodot");
+      const bundle = await exportGodotVehicleBundle(sceneData, fileName.replace(/\.json$/i, ""));
+      if (electron) {
+        await electron.exportBundle({ fileName: bundle.fileName, bytes: bundle.bytes });
+      } else {
+        downloadBytes(bundle.fileName, bundle.bytes, "application/zip");
+      }
+      if (bundle.warnings.length > 0) window.alert(`Godot bundle exported with warnings:\n\n${bundle.warnings.join("\n")}`);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Could not export Godot vehicle bundle.");
+    }
+  }, [electron, fileName, sceneData]);
+
   const confirmExportStl = useCallback(async () => {
     const scale = Number(printScaleInput);
     if (!Number.isFinite(scale) || scale <= 0) {
@@ -471,6 +487,9 @@ export function App() {
         case "export-stl":
           void exportStl();
           break;
+        case "export-godot":
+          void exportGodot();
+          break;
         case "undo":
           undo();
           break;
@@ -485,7 +504,7 @@ export function App() {
           break;
       }
     });
-  }, [beginPaste, copySelection, electron, exportGltf, exportJson, exportObj, exportStl, newScene, open, redo, save, saveAs, undo]);
+  }, [beginPaste, copySelection, electron, exportGltf, exportGodot, exportJson, exportObj, exportStl, newScene, open, redo, save, saveAs, undo]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -579,6 +598,7 @@ export function App() {
         canSelectLoop={panelActionState.canSelectLoop}
         onSelectLoop={selectCompleteLoop}
         onPreviewPanel={setPanelPreviewSide}
+        onExportGodot={() => void exportGodot()}
       />
       <div style={{ display: "flex", flex: 1, minHeight: 0, position: "relative" }}>
         <Viewport
@@ -631,6 +651,12 @@ export function App() {
           onMoveSelection={(layerId) => setSceneData((scene) =>
             assignSelectionToLayer(scene, selection, layerId))}
         />
+        <RuntimePanel
+          scene={sceneData}
+          selectedNodeIds={selectedNodeIds}
+          selectedWidgetIds={selectedWidgetIds}
+          onChange={setSceneData}
+        />
         <div
           style={{
             position: "absolute",
@@ -662,6 +688,18 @@ export function App() {
 
 function downloadText(fileName: string, text: string, type: string) {
   const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function downloadBytes(fileName: string, bytes: Uint8Array, type: string) {
+  const blob = new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)], { type });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;

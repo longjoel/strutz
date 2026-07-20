@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_LAYER_ID } from "./constants";
+import { CURRENT_SCENE_VERSION, DEFAULT_LAYER_ID } from "./constants";
 import { createRootScene } from "./document";
 import {
   assignSelectionToLayer,
@@ -15,7 +15,7 @@ describe("scene layers", () => {
     const legacy = { ...root, schemaVersion: 1, layers: undefined };
     const migrated = normalizeSceneAttachments(legacy);
 
-    expect(migrated.schemaVersion).toBe(2);
+    expect(migrated.schemaVersion).toBe(CURRENT_SCENE_VERSION);
     expect(migrated.layers).toEqual([{ id: DEFAULT_LAYER_ID, name: "Default", visible: true }]);
     expect(Object.values(migrated.nodes)[0].layerId).toBe(DEFAULT_LAYER_ID);
   });

@@ -17,6 +17,9 @@ The findings and recommended follow-up order from the first cleanup pass are in 
 - `src/core/widgetGeometry.ts`: shared widget orientation frames and renderer-independent oriented collision volumes.
 - `src/core/document.ts`: scene creation and text/OBJ serialization.
 - `src/core/exportStl.ts`: weldable, millimeter-scaled STL serialization for slicers.
+- `src/ui/exportGodot.ts`: Godot-local frame conversion, structured GLB, collision/component PackedScene serialization, manifest/config generation, and ZIP assembly.
+- `src/core/godotRuntime.ts`: dependency-free GDScript templates for the capability-based RigidBody controller, force emitters, raycast wheels, and repulsor pads.
+- `src/core/zip.ts`: dependency-free STORE-mode ZIP writer used by browser and Electron bundle export.
 - `src/ui`: React interaction state and Three.js rendering.
 - `electron`: native file/menu adapter. The browser build remains usable without it.
 
@@ -44,3 +47,4 @@ Contextual panel command availability lives in `src/ui/panelActions.ts`. Loop di
 - Replace the shallow file-shape assertion with versioned runtime document validation and migrations.
 - Extract undo/redo history and file commands from `App.tsx`.
 - Lazy-load exporter and renderer-heavy dependencies if web startup size becomes a concern; the current production bundle triggers Vite's 500 kB chunk warning.
+- Godot exports are lazy-loaded, target Godot 4.7, use cockpit forward/up as the runtime frame, and recenter visuals/collisions/components on calculated center of mass. Keep generated scripts free of global `class_name` declarations so multiple exported vehicles can coexist.

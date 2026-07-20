@@ -1,6 +1,6 @@
 import type { FaceName } from "./types";
 
-export const CURRENT_SCENE_VERSION = 2;
+export const CURRENT_SCENE_VERSION = 3;
 export const DEFAULT_LAYER_ID = "default";
 
 /** The construction catalog. Add future size families here, not in UI code. */
@@ -74,6 +74,32 @@ export const DEFAULT_PHYSICS_SETTINGS = {
   materialDensityKgPerM3: 100,
   defaultNodeMassKg: 10,
   panelThicknessUnits: 0.08,
+} as const;
+
+export const DEFAULT_VEHICLE_RUNTIME_SETTINGS = {
+  gravityScale: 1,
+  linearDamp: 0.05,
+  angularDamp: 0.1,
+  friction: 0.8,
+  bounce: 0.05,
+  collisionLayer: 1,
+  collisionMask: 1,
+  engineAcceleration: 12,
+  thrusterLinearAcceleration: 6,
+  thrusterAngularAcceleration: 2,
+  wheelDriveAcceleration: 6,
+  wheelBrakeAcceleration: 12,
+  steeringLimitDegrees: 30,
+  suspensionTravelMeters: 0.35,
+  suspensionDampingRatio: 0.8,
+  wheelGrip: 1.2,
+  repulsorRangeMeters: 2,
+  repulsorTargetMeters: 1,
+  repulsorMaxGravity: 2.5,
+  repulsorDampingRatio: 0.9,
+  cameraFovDegrees: 75,
+  cameraNearMeters: 0.05,
+  cameraFarMeters: 4000,
 } as const;
 
 export const GRID_SIZE = CONSTRUCTION_RULES.gridSize;

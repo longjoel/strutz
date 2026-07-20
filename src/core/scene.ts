@@ -10,7 +10,14 @@ import type {
   StrutKind,
   Attachments,
 } from "./types";
-import { CURRENT_SCENE_VERSION, DEFAULT_LAYER_ID, oppositeFace, strutWidth } from "./constants";
+import {
+  CURRENT_SCENE_VERSION,
+  DEFAULT_LAYER_ID,
+  DEFAULT_PHYSICS_SETTINGS,
+  DEFAULT_VEHICLE_RUNTIME_SETTINGS,
+  oppositeFace,
+  strutWidth,
+} from "./constants";
 import {
   faceNormal,
   getAttachmentPosition,
@@ -140,6 +147,8 @@ export function normalizeSceneAttachments(scene: SceneData): SceneData {
   return {
     ...currentScene,
     schemaVersion: CURRENT_SCENE_VERSION,
+    physics: { ...DEFAULT_PHYSICS_SETTINGS, ...scene.physics },
+    runtime: { ...DEFAULT_VEHICLE_RUNTIME_SETTINGS, ...scene.runtime },
     layers,
     nodes,
     struts: Object.fromEntries(Object.entries(scene.struts).map(([id, strut]) => [

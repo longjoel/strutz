@@ -95,6 +95,10 @@ function buildMenu() {
           label: "Export Printable STL...",
           click: () => sendMenuCommand("export-stl"),
         },
+        {
+          label: "Export Godot Vehicle Bundle...",
+          click: () => sendMenuCommand("export-godot"),
+        },
         { type: "separator" },
         isMac ? { role: "close" } : { role: "quit" },
       ],
@@ -227,6 +231,17 @@ ipcMain.handle("file:export-scene", async (_event, payload) => {
   }
 
   await fs.writeFile(result.filePath, payload.text, "utf8");
+  return { canceled: false, filePath: result.filePath };
+});
+
+ipcMain.handle("file:export-bundle", async (_event, payload) => {
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: "Export Godot Vehicle Bundle",
+    defaultPath: payload.fileName,
+    filters: [{ name: "Godot Vehicle Bundle", extensions: ["zip"] }],
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  await fs.writeFile(result.filePath, Buffer.from(payload.bytes));
   return { canceled: false, filePath: result.filePath };
 });
 

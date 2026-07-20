@@ -77,6 +77,25 @@ export interface WidgetData {
   rotation: number;
   /** Overrides density-derived widget mass when supplied. */
   massKg?: number;
+  /** Optional Godot/runtime behavior overrides for this component. */
+  runtime?: WidgetRuntimeOverrides;
+}
+
+export interface WidgetRuntimeOverrides {
+  enabled?: boolean;
+  maxForceNewtons?: number;
+  steering?: boolean;
+  driven?: boolean;
+  braking?: boolean;
+  steeringLimitDegrees?: number;
+  suspensionTravelMeters?: number;
+  grip?: number;
+  repulsorRangeMeters?: number;
+  repulsorTargetMeters?: number;
+  primaryCamera?: boolean;
+  cameraFovDegrees?: number;
+  cameraNearMeters?: number;
+  cameraFarMeters?: number;
 }
 
 export interface PhysicsSettings {
@@ -86,6 +105,32 @@ export interface PhysicsSettings {
   defaultNodeMassKg: number;
   /** Panels are surfaces, so their physical thickness must be supplied. */
   panelThicknessUnits: number;
+}
+
+export interface VehicleRuntimeSettings {
+  gravityScale: number;
+  linearDamp: number;
+  angularDamp: number;
+  friction: number;
+  bounce: number;
+  collisionLayer: number;
+  collisionMask: number;
+  engineAcceleration: number;
+  thrusterLinearAcceleration: number;
+  thrusterAngularAcceleration: number;
+  wheelDriveAcceleration: number;
+  wheelBrakeAcceleration: number;
+  steeringLimitDegrees: number;
+  suspensionTravelMeters: number;
+  suspensionDampingRatio: number;
+  wheelGrip: number;
+  repulsorRangeMeters: number;
+  repulsorTargetMeters: number;
+  repulsorMaxGravity: number;
+  repulsorDampingRatio: number;
+  cameraFovDegrees: number;
+  cameraNearMeters: number;
+  cameraFarMeters: number;
 }
 
 export interface SceneData {
@@ -99,6 +144,8 @@ export interface SceneData {
   widgets: Record<string, WidgetData>;
   /** Optional physical properties; defaults are used when absent. */
   physics?: Partial<PhysicsSettings>;
+  /** Runtime defaults used by Godot-ready vehicle exports. */
+  runtime?: Partial<VehicleRuntimeSettings>;
   /** Legacy input only. normalizeSceneAttachments migrates these to widgets. */
   accessories?: Record<string, AccessoryData>;
 }
