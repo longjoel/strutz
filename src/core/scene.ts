@@ -728,6 +728,8 @@ function legacyWidgetKind(definitionId: string): WidgetKind | null {
   switch (definitionId) {
     case "antenna":
     case "rocket-engine":
+    case "thruster":
+    case "repulsor-pad":
     case "cockpit":
     case "wheel":
       return definitionId;

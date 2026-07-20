@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { collisionBoxesOverlap, getWidgetAxes, type OrientedCollisionBox } from "./widgetGeometry";
+import {
+  collisionBoxesOverlap,
+  getWidgetAxes,
+  getWidgetForceVector,
+  type OrientedCollisionBox,
+} from "./widgetGeometry";
 
 describe("widget collision geometry", () => {
   it("matches viewport attachment axes for every node face", () => {
@@ -19,6 +24,14 @@ describe("widget collision geometry", () => {
     const a = box(0);
     expect(collisionBoxesOverlap(a, box(2))).toBe(false);
     expect(collisionBoxesOverlap(a, box(1.99))).toBe(true);
+  });
+
+  it("exposes opposite exhaust thrust and outward repulsor force vectors", () => {
+    expect(getWidgetForceVector({ kind: "thruster", face: "front", rotation: 0 }))
+      .toEqual({ x: 0, y: 0, z: -1 });
+    expect(getWidgetForceVector({ kind: "repulsor-pad", face: "bottom", rotation: 0 }))
+      .toEqual({ x: 0, y: -1, z: 0 });
+    expect(getWidgetForceVector({ kind: "cockpit", face: "top", rotation: 0 })).toBeNull();
   });
 });
 

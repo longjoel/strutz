@@ -77,6 +77,16 @@ Use `validatePanelPlacement` before placement. Omitting its `side` argument asks
 5. Pasted assemblies are checked against existing widgets and internally against the other widgets in the paste.
 6. Removing the target node removes its widgets.
 
+The cockpit is 3 construction units long, corresponding to 2 meters at the physical export scale. Its attachment normal is forward; its rolled local +Z axis is up and carries the viewport marker. Its camera lens is a named export object whose forward/up convention is the same local +Y/+Z frame.
+
+Thrusters apply force opposite their outward attachment normal (the normal is the exhaust vector). Repulsor pads apply force along the outward normal. `getWidgetForceVector` is the renderer-independent source of these runtime vectors.
+
+Main engines have a 4-unit-diameter, 2-unit-long cylindrical body followed by a 1.25-unit flared exhaust funnel. Their force convention matches thrusters, but their size and intended output distinguish primary propulsion from maneuvering jets.
+
+## Mass properties
+
+Nodes may carry an individual `massKg`; otherwise `physics.defaultNodeMassKg` is used. Structural struts and panels use `physics.materialDensityKgPerM3`, with `physics.panelThicknessUnits` supplying thickness for surface panels. Widgets may override `massKg`; otherwise their collision-box volumes use the same effective density. `calculateMassProperties` returns total mass plus center of mass in construction units and meters.
+
 Use `validateWidgetPlacement` before placement.
 
 ## Mutation and persistence invariants

@@ -1,4 +1,10 @@
-import { WHEEL_GEOMETRY } from "./constants";
+import {
+  COCKPIT_GEOMETRY,
+  ENGINE_GEOMETRY,
+  REPULSOR_GEOMETRY,
+  THRUSTER_GEOMETRY,
+  WHEEL_GEOMETRY,
+} from "./constants";
 import { add, cross, dot, faceNormal, length, normalize, scale, sub } from "./rules";
 import type { FaceName, Vec3, WidgetData, WidgetKind } from "./types";
 
@@ -25,12 +31,52 @@ const COLLISION_BOXES: Record<WidgetKind, LocalCollisionBox[]> = {
     { center: { x: 0, y: 1.08, z: 0 }, size: { x: 0.36, y: 0.3, z: 0.36 } },
   ],
   "rocket-engine": [
-    { center: { x: 0, y: 0.32, z: 0 }, size: { x: 0.66, y: 0.64, z: 0.66 } },
-    { center: { x: 0, y: 0.82, z: 0 }, size: { x: 0.76, y: 0.48, z: 0.76 } },
+    {
+      center: { x: 0, y: ENGINE_GEOMETRY.bodyLength / 2, z: 0 },
+      size: {
+        x: ENGINE_GEOMETRY.bodyRadius * 2,
+        y: ENGINE_GEOMETRY.bodyLength,
+        z: ENGINE_GEOMETRY.bodyRadius * 2,
+      },
+    },
+    {
+      center: { x: 0, y: ENGINE_GEOMETRY.bodyLength + ENGINE_GEOMETRY.nozzleLength / 2, z: 0 },
+      size: {
+        x: ENGINE_GEOMETRY.nozzleRadius * 2,
+        y: ENGINE_GEOMETRY.nozzleLength,
+        z: ENGINE_GEOMETRY.nozzleRadius * 2,
+      },
+    },
+  ],
+  thruster: [
+    {
+      center: { x: 0, y: (THRUSTER_GEOMETRY.bodyLength + THRUSTER_GEOMETRY.nozzleLength) / 2, z: 0 },
+      size: {
+        x: THRUSTER_GEOMETRY.nozzleRadius * 2,
+        y: THRUSTER_GEOMETRY.bodyLength + THRUSTER_GEOMETRY.nozzleLength,
+        z: THRUSTER_GEOMETRY.nozzleRadius * 2,
+      },
+    },
+  ],
+  "repulsor-pad": [
+    {
+      center: { x: 0, y: (REPULSOR_GEOMETRY.mountLength + REPULSOR_GEOMETRY.padThickness) / 2, z: 0 },
+      size: {
+        x: REPULSOR_GEOMETRY.padRadius * 2,
+        y: REPULSOR_GEOMETRY.mountLength + REPULSOR_GEOMETRY.padThickness,
+        z: REPULSOR_GEOMETRY.padRadius * 2,
+      },
+    },
   ],
   cockpit: [
-    { center: { x: 0, y: 0.32, z: 0 }, size: { x: 0.8, y: 0.64, z: 0.72 } },
-    { center: { x: 0, y: 0.67, z: 0.08 }, size: { x: 0.86, y: 0.34, z: 0.86 } },
+    {
+      center: { x: 0, y: COCKPIT_GEOMETRY.length / 2, z: 0 },
+      size: {
+        x: COCKPIT_GEOMETRY.baseRadius * 2,
+        y: COCKPIT_GEOMETRY.length,
+        z: COCKPIT_GEOMETRY.baseRadius * 2,
+      },
+    },
   ],
   wheel: [
     {
@@ -55,6 +101,45 @@ const COLLISION_BOXES: Record<WidgetKind, LocalCollisionBox[]> = {
     },
   ],
 };
+
+export function getCockpitProfile(): Array<{ offset: number; radius: number }> {
+  return [
+    { offset: 0, radius: COCKPIT_GEOMETRY.baseRadius },
+    { offset: COCKPIT_GEOMETRY.length, radius: COCKPIT_GEOMETRY.noseRadius },
+  ];
+}
+
+export function getCockpitViewportFrame(anchor: Vec3, axes: WidgetAxes): {
+  center: Vec3;
+  xAxis: Vec3;
+  yAxis: Vec3;
+  zAxis: Vec3;
+} {
+  const cosine = Math.cos(COCKPIT_GEOMETRY.viewportTilt);
+  const sine = Math.sin(COCKPIT_GEOMETRY.viewportTilt);
+  return {
+    center: add(
+      add(anchor, scale(axes.y, COCKPIT_GEOMETRY.viewportCenterY)),
+      scale(axes.z, COCKPIT_GEOMETRY.viewportCenterZ),
+    ),
+    xAxis: axes.x,
+    yAxis: add(scale(axes.y, cosine), scale(axes.z, sine)),
+    zAxis: add(scale(axes.y, -sine), scale(axes.z, cosine)),
+  };
+}
+
+/** Direction in which a powered widget applies force to the craft/world. */
+export function getWidgetForceVector(
+  widget: Pick<WidgetData, "kind" | "face" | "rotation">,
+): Vec3 | null {
+  const outward = getWidgetAxes(widget.face, widget.rotation).y;
+  if (widget.kind === "thruster" || widget.kind === "rocket-engine") {
+    const force = scale(outward, -1);
+    return { x: force.x || 0, y: force.y || 0, z: force.z || 0 };
+  }
+  if (widget.kind === "repulsor-pad") return outward;
+  return null;
+}
 
 /** Match Three.js setFromUnitVectors(+Y, face normal), then apply local roll. */
 export function getWidgetAxes(face: FaceName, rotation: number): WidgetAxes {

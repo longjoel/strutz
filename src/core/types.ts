@@ -21,6 +21,8 @@ export interface NodeData {
   /** Missing only on legacy, pre-layer documents. */
   layerId?: string;
   position: Vec3;
+  /** Optional concentrated connector/component mass used by physics export. */
+  massKg?: number;
   attachments: Attachments;
 }
 
@@ -58,7 +60,13 @@ export interface AccessoryDefinition {
   color: string;
 }
 
-export type WidgetKind = "antenna" | "rocket-engine" | "cockpit" | "wheel";
+export type WidgetKind =
+  | "antenna"
+  | "rocket-engine"
+  | "thruster"
+  | "repulsor-pad"
+  | "cockpit"
+  | "wheel";
 
 export interface WidgetData {
   id: string;
@@ -67,6 +75,17 @@ export interface WidgetData {
   nodeId: string;
   face: FaceName;
   rotation: number;
+  /** Overrides density-derived widget mass when supplied. */
+  massKg?: number;
+}
+
+export interface PhysicsSettings {
+  /** Effective density for structural geometry and widgets. */
+  materialDensityKgPerM3: number;
+  /** Used for nodes without an explicit massKg. */
+  defaultNodeMassKg: number;
+  /** Panels are surfaces, so their physical thickness must be supplied. */
+  panelThicknessUnits: number;
 }
 
 export interface SceneData {
@@ -78,6 +97,8 @@ export interface SceneData {
   struts: Record<string, StrutData>;
   panels: Record<string, PanelData>;
   widgets: Record<string, WidgetData>;
+  /** Optional physical properties; defaults are used when absent. */
+  physics?: Partial<PhysicsSettings>;
   /** Legacy input only. normalizeSceneAttachments migrates these to widgets. */
   accessories?: Record<string, AccessoryData>;
 }

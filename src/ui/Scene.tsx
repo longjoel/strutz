@@ -35,7 +35,16 @@ import {
   getAttachmentWorldPosition,
   hasNodeContact,
 } from "../core/scene";
-import { nodeSize, strutWidth, VALID_STRUT_LENGTHS, WHEEL_GEOMETRY } from "../core/constants";
+import {
+  COCKPIT_GEOMETRY,
+  ENGINE_GEOMETRY,
+  nodeSize,
+  REPULSOR_GEOMETRY,
+  strutWidth,
+  THRUSTER_GEOMETRY,
+  VALID_STRUT_LENGTHS,
+  WHEEL_GEOMETRY,
+} from "../core/constants";
 import {
   FACE_NORMALS as RULE_FACE_NORMALS,
   centerSpacingForStrutLength,
@@ -1797,6 +1806,8 @@ function WidgetMesh({
     >
       {widget.kind === "antenna" && <AntennaWidget color={color} hovered={hovered} />}
       {widget.kind === "rocket-engine" && <RocketEngineWidget color={color} hovered={hovered} />}
+      {widget.kind === "thruster" && <ThrusterWidget color={color} hovered={hovered} />}
+      {widget.kind === "repulsor-pad" && <RepulsorPadWidget color={color} hovered={hovered} />}
       {widget.kind === "cockpit" && <CockpitWidget color={color} hovered={hovered} />}
       {widget.kind === "wheel" && <WheelWidget color={color} hovered={hovered} />}
     </group>
@@ -1823,14 +1834,61 @@ function AntennaWidget({ color, hovered }: { color: string; hovered: boolean }) 
 function RocketEngineWidget({ color, hovered }: { color: string; hovered: boolean }) {
   return (
     <group>
-      <mesh position={[0, 0.32, 0]} castShadow>
-        <cylinderGeometry args={[0.33, 0.28, 0.64, 16]} />
-        <meshStandardMaterial color={color} />
+      <mesh position={[0, ENGINE_GEOMETRY.bodyLength / 2, 0]} castShadow>
+        <cylinderGeometry args={[
+          ENGINE_GEOMETRY.bodyRadius,
+          ENGINE_GEOMETRY.bodyRadius,
+          ENGINE_GEOMETRY.bodyLength,
+          ENGINE_GEOMETRY.radialSegments,
+        ]} />
+        <meshStandardMaterial color={color} metalness={0.32} roughness={0.42} />
         <HoverEdges visible={hovered} />
       </mesh>
-      <mesh position={[0, 0.82, 0]} rotation={[Math.PI, 0, 0]} castShadow>
-        <coneGeometry args={[0.38, 0.48, 16]} />
-        <meshStandardMaterial color="#697b88" />
+      <mesh position={[0, ENGINE_GEOMETRY.bodyLength + ENGINE_GEOMETRY.nozzleLength / 2, 0]} castShadow>
+        <cylinderGeometry args={[
+          ENGINE_GEOMETRY.nozzleRadius,
+          ENGINE_GEOMETRY.throatRadius,
+          ENGINE_GEOMETRY.nozzleLength,
+          ENGINE_GEOMETRY.radialSegments,
+          1,
+          true,
+        ]} />
+        <meshStandardMaterial color="#697b88" metalness={0.48} roughness={0.36} side={THREE.DoubleSide} />
+        <HoverEdges visible={hovered} />
+      </mesh>
+    </group>
+  );
+}
+
+function ThrusterWidget({ color, hovered }: { color: string; hovered: boolean }) {
+  return (
+    <group>
+      <mesh position={[0, THRUSTER_GEOMETRY.bodyLength / 2, 0]} castShadow>
+        <cylinderGeometry args={[THRUSTER_GEOMETRY.bodyRadius, THRUSTER_GEOMETRY.bodyRadius, THRUSTER_GEOMETRY.bodyLength, THRUSTER_GEOMETRY.radialSegments]} />
+        <meshStandardMaterial color={color} metalness={0.3} roughness={0.4} />
+        <HoverEdges visible={hovered} />
+      </mesh>
+      <mesh position={[0, THRUSTER_GEOMETRY.bodyLength + THRUSTER_GEOMETRY.nozzleLength / 2, 0]} castShadow>
+        <cylinderGeometry args={[THRUSTER_GEOMETRY.nozzleRadius * 0.72, THRUSTER_GEOMETRY.nozzleRadius, THRUSTER_GEOMETRY.nozzleLength, THRUSTER_GEOMETRY.radialSegments]} />
+        <meshStandardMaterial color="#697b88" metalness={0.45} roughness={0.34} />
+        <HoverEdges visible={hovered} />
+      </mesh>
+    </group>
+  );
+}
+
+function RepulsorPadWidget({ color, hovered }: { color: string; hovered: boolean }) {
+  const center = REPULSOR_GEOMETRY.mountLength + REPULSOR_GEOMETRY.padThickness / 2;
+  return (
+    <group>
+      <mesh position={[0, REPULSOR_GEOMETRY.mountLength / 2, 0]} castShadow>
+        <cylinderGeometry args={[REPULSOR_GEOMETRY.mountRadius, REPULSOR_GEOMETRY.mountRadius, REPULSOR_GEOMETRY.mountLength, REPULSOR_GEOMETRY.radialSegments]} />
+        <meshStandardMaterial color={color} metalness={0.3} roughness={0.42} />
+        <HoverEdges visible={hovered} />
+      </mesh>
+      <mesh position={[0, center, 0]} castShadow>
+        <cylinderGeometry args={[REPULSOR_GEOMETRY.padRadius, REPULSOR_GEOMETRY.padRadius, REPULSOR_GEOMETRY.padThickness, REPULSOR_GEOMETRY.radialSegments]} />
+        <meshStandardMaterial color="#65d9ff" emissive="#174b66" emissiveIntensity={0.65} />
         <HoverEdges visible={hovered} />
       </mesh>
     </group>
@@ -1840,14 +1898,39 @@ function RocketEngineWidget({ color, hovered }: { color: string; hovered: boolea
 function CockpitWidget({ color, hovered }: { color: string; hovered: boolean }) {
   return (
     <group>
-      <mesh position={[0, 0.32, 0]} castShadow>
-        <boxGeometry args={[0.8, 0.64, 0.72]} />
-        <meshStandardMaterial color={color} />
+      <mesh position={[0, COCKPIT_GEOMETRY.length / 2, 0]} castShadow>
+        <cylinderGeometry args={[
+          COCKPIT_GEOMETRY.noseRadius,
+          COCKPIT_GEOMETRY.baseRadius,
+          COCKPIT_GEOMETRY.length,
+          COCKPIT_GEOMETRY.radialSegments,
+        ]} />
+        <meshStandardMaterial color={color} metalness={0.08} roughness={0.58} flatShading />
         <HoverEdges visible={hovered} />
       </mesh>
-      <mesh position={[0, 0.67, 0.08]} rotation={[0, Math.PI / 4, 0]} castShadow>
-        <coneGeometry args={[0.43, 0.34, 4]} />
-        <meshStandardMaterial color="#86b9d0" metalness={0.15} roughness={0.28} />
+      <mesh
+        position={[0, COCKPIT_GEOMETRY.viewportCenterY, COCKPIT_GEOMETRY.viewportCenterZ]}
+        rotation={[COCKPIT_GEOMETRY.viewportTilt, 0, 0]}
+        castShadow
+      >
+        <boxGeometry args={[
+          COCKPIT_GEOMETRY.viewportWidth,
+          COCKPIT_GEOMETRY.viewportLength,
+          COCKPIT_GEOMETRY.viewportThickness,
+        ]} />
+        <meshStandardMaterial
+          color={SCENE_COLORS.cockpitViewport}
+          metalness={0.3}
+          roughness={0.18}
+        />
+        <HoverEdges visible={hovered} />
+      </mesh>
+      <mesh
+        position={[0, COCKPIT_GEOMETRY.cameraCenterY, COCKPIT_GEOMETRY.cameraCenterZ]}
+        castShadow
+      >
+        <cylinderGeometry args={[COCKPIT_GEOMETRY.cameraRadius, COCKPIT_GEOMETRY.cameraRadius, COCKPIT_GEOMETRY.cameraLength, 16]} />
+        <meshStandardMaterial color="#6ed8ff" emissive="#173d55" emissiveIntensity={0.55} metalness={0.3} roughness={0.2} />
         <HoverEdges visible={hovered} />
       </mesh>
     </group>

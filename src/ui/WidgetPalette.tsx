@@ -3,6 +3,8 @@ import type { WidgetKind } from "../core/types";
 const WIDGETS: Array<{ kind: WidgetKind; label: string; icon: string }> = [
   { kind: "antenna", label: "Antenna", icon: "A" },
   { kind: "rocket-engine", label: "Engine", icon: "E" },
+  { kind: "thruster", label: "Thruster", icon: "T" },
+  { kind: "repulsor-pad", label: "Repulsor", icon: "R" },
   { kind: "cockpit", label: "Cockpit", icon: "C" },
   { kind: "wheel", label: "Wheel", icon: "◉" },
 ];

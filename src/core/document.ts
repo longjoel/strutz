@@ -1,4 +1,15 @@
-import { CURRENT_SCENE_VERSION, DEFAULT_LAYER_ID, nodeSize, strutWidth, WHEEL_GEOMETRY } from "./constants";
+import {
+  COCKPIT_GEOMETRY,
+  CURRENT_SCENE_VERSION,
+  DEFAULT_LAYER_ID,
+  DEFAULT_PHYSICS_SETTINGS,
+  ENGINE_GEOMETRY,
+  nodeSize,
+  REPULSOR_GEOMETRY,
+  strutWidth,
+  THRUSTER_GEOMETRY,
+  WHEEL_GEOMETRY,
+} from "./constants";
 import { createNode, getPanelBrushGeometry } from "./scene";
 import {
   getAttachmentPosition,
@@ -9,7 +20,7 @@ import {
 } from "./rules";
 import type { FaceName, SceneData, Vec3, WidgetData } from "./types";
 import { createBoxSurface, createRadialProfileSurface, createStrutSurface, type QuadSurface } from "./geometry";
-import { getWidgetAxes } from "./widgetGeometry";
+import { getCockpitProfile, getCockpitViewportFrame, getWidgetAxes } from "./widgetGeometry";
 
 export function createRootScene(): SceneData {
   const root = createNode({ x: 0, y: 0, z: 0 });
@@ -20,6 +31,7 @@ export function createRootScene(): SceneData {
     struts: {},
     panels: {},
     widgets: {},
+    physics: { ...DEFAULT_PHYSICS_SETTINGS },
   };
 }
 
@@ -195,14 +207,87 @@ function addWidgetToObj(builder: ObjBuilder, widget: WidgetData, nodePosition: V
       builder.addOrientedBox(center(0, 0.5, 0), axes.x, axes.y, axes.z, 0.18, 1, 0.18);
       builder.addOrientedBox(center(0, 1.08, 0), axes.x, axes.y, axes.z, 0.3, 0.3, 0.3);
       break;
-    case "rocket-engine":
-      builder.addOrientedBox(center(0, 0.32, 0), axes.x, axes.y, axes.z, 0.6, 0.64, 0.6);
-      builder.addOrientedBox(center(0, 0.82, 0), axes.x, axes.y, axes.z, 0.76, 0.48, 0.76);
+    case "rocket-engine": {
+      const bodyEnd = ENGINE_GEOMETRY.bodyLength;
+      const surface = createRadialProfileSurface(
+        anchor, axes.x, axes.y, axes.z,
+        [
+          { offset: 0, radius: ENGINE_GEOMETRY.bodyRadius },
+          { offset: bodyEnd, radius: ENGINE_GEOMETRY.bodyRadius },
+          { offset: bodyEnd, radius: ENGINE_GEOMETRY.throatRadius },
+          { offset: bodyEnd + ENGINE_GEOMETRY.nozzleLength, radius: ENGINE_GEOMETRY.nozzleRadius },
+        ],
+        ENGINE_GEOMETRY.radialSegments,
+      );
+      builder.addTriangleMesh(surface.vertices, surface.indices);
       break;
-    case "cockpit":
-      builder.addOrientedBox(center(0, 0.32, 0), axes.x, axes.y, axes.z, 0.8, 0.64, 0.72);
-      builder.addOrientedBox(center(0, 0.67, 0.08), axes.x, axes.y, axes.z, 0.62, 0.34, 0.5);
+    }
+    case "thruster": {
+      const bodyEnd = THRUSTER_GEOMETRY.bodyLength;
+      const surface = createRadialProfileSurface(
+        anchor, axes.x, axes.y, axes.z,
+        [
+          { offset: 0, radius: THRUSTER_GEOMETRY.bodyRadius },
+          { offset: bodyEnd, radius: THRUSTER_GEOMETRY.bodyRadius },
+          { offset: bodyEnd, radius: THRUSTER_GEOMETRY.nozzleRadius },
+          { offset: bodyEnd + THRUSTER_GEOMETRY.nozzleLength, radius: THRUSTER_GEOMETRY.nozzleRadius * 0.72 },
+        ],
+        THRUSTER_GEOMETRY.radialSegments,
+      );
+      builder.addTriangleMesh(surface.vertices, surface.indices);
       break;
+    }
+    case "repulsor-pad": {
+      const padStart = REPULSOR_GEOMETRY.mountLength;
+      const surface = createRadialProfileSurface(
+        anchor, axes.x, axes.y, axes.z,
+        [
+          { offset: 0, radius: REPULSOR_GEOMETRY.mountRadius },
+          { offset: padStart, radius: REPULSOR_GEOMETRY.mountRadius },
+          { offset: padStart, radius: REPULSOR_GEOMETRY.padRadius },
+          { offset: padStart + REPULSOR_GEOMETRY.padThickness, radius: REPULSOR_GEOMETRY.padRadius },
+        ],
+        REPULSOR_GEOMETRY.radialSegments,
+      );
+      builder.addTriangleMesh(surface.vertices, surface.indices);
+      break;
+    }
+    case "cockpit": {
+      const body = createRadialProfileSurface(
+        anchor,
+        axes.x,
+        axes.y,
+        axes.z,
+        getCockpitProfile(),
+        COCKPIT_GEOMETRY.radialSegments,
+      );
+      builder.addTriangleMesh(body.vertices, body.indices);
+      const viewport = getCockpitViewportFrame(anchor, axes);
+      builder.object(`widget_cockpit-viewport_${widget.id}`);
+      builder.addOrientedBox(
+        viewport.center,
+        viewport.xAxis,
+        viewport.yAxis,
+        viewport.zAxis,
+        COCKPIT_GEOMETRY.viewportWidth,
+        COCKPIT_GEOMETRY.viewportLength,
+        COCKPIT_GEOMETRY.viewportThickness,
+      );
+      builder.object(`widget_cockpit-camera_${widget.id}`);
+      const camera = createRadialProfileSurface(
+        center(0, COCKPIT_GEOMETRY.cameraCenterY - COCKPIT_GEOMETRY.cameraLength / 2, COCKPIT_GEOMETRY.cameraCenterZ),
+        axes.x,
+        axes.y,
+        axes.z,
+        [
+          { offset: 0, radius: COCKPIT_GEOMETRY.cameraRadius },
+          { offset: COCKPIT_GEOMETRY.cameraLength, radius: COCKPIT_GEOMETRY.cameraRadius },
+        ],
+        16,
+      );
+      builder.addTriangleMesh(camera.vertices, camera.indices);
+      break;
+    }
     case "wheel": {
       const surface = createRadialProfileSurface(
         anchor,

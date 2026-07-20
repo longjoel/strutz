@@ -5,4 +5,7 @@ export const SCENE_COLORS = {
   planarCornerStrut: "#718f7d",
   panel: "#88a6b8",
   widget: "#4ecca3",
+  cockpitViewport: "#16364a",
+  cockpitCamera: "#6ed8ff",
+  repulsor: "#65d9ff",
 } as const;

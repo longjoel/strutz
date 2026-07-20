@@ -93,20 +93,28 @@ describe("widget rules", () => {
   });
 
   it("exports widget geometry as named OBJ objects", () => {
-    let scene = widgetScene();
+    const scene = widgetScene();
     for (const [id, kind, face] of [
       ["antenna", "antenna", "top"],
       ["engine", "rocket-engine", "front"],
+      ["thruster", "thruster", "back"],
+      ["repulsor", "repulsor-pad", "left"],
       ["cockpit", "cockpit", "right"],
       ["wheel", "wheel", "bottom"],
     ] as const) {
-      scene = addWidgetToScene(scene, { id, kind, nodeId: "node", face, rotation: 0 });
+      // Export is also responsible for faithfully preserving already-loaded
+      // scenes, including legacy layouts that predate collision validation.
+      scene.widgets[id] = { id, kind, nodeId: "node", face, rotation: 0 };
     }
 
     const obj = exportSceneObj(scene);
     expect(obj).toContain("o widget_antenna_antenna");
     expect(obj).toContain("o widget_rocket-engine_engine");
+    expect(obj).toContain("o widget_thruster_thruster");
+    expect(obj).toContain("o widget_repulsor-pad_repulsor");
     expect(obj).toContain("o widget_cockpit_cockpit");
+    expect(obj).toContain("o widget_cockpit-viewport_cockpit");
+    expect(obj).toContain("o widget_cockpit-camera_cockpit");
     expect(obj).toContain("o widget_wheel_wheel");
   });
 });

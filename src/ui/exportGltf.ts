@@ -52,6 +52,22 @@ export function applySceneMaterials(object: Object3D, scene: SceneData): void {
   }
   for (const widget of Object.values(scene.widgets ?? {})) {
     materialByObjectName.set(`widget_${widget.kind}_${widget.id}`, createMaterial(SCENE_COLORS.widget));
+    if (widget.kind === "cockpit") {
+      materialByObjectName.set(
+        `widget_cockpit-viewport_${widget.id}`,
+        createMaterial(SCENE_COLORS.cockpitViewport),
+      );
+      materialByObjectName.set(
+        `widget_cockpit-camera_${widget.id}`,
+        createMaterial(SCENE_COLORS.cockpitCamera),
+      );
+    }
+    if (widget.kind === "repulsor-pad") {
+      materialByObjectName.set(
+        `widget_repulsor-pad_${widget.id}`,
+        createMaterial(SCENE_COLORS.repulsor),
+      );
+    }
   }
 
   object.traverse((child) => {

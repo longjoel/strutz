@@ -106,7 +106,11 @@ The formal domain contract, including terminology, validation APIs, and edge cas
 - Boundary struts contribute panel-facing inward planes; planar corners use their main diagonal run because their endpoint stubs terminate inside nodes. Coplanar loops use their shared support plane, while folded loops derive exposed planes from local strut faces.
 - Invalid or concave loops are rejected instead of producing a warped triangle fan; concave openings should be divided into multiple panel loops.
 - Each closed strut loop accepts one panel on each side, allowing an enclosed box to be built from four struts and four nodes.
-- Widgets snap to a free node face. Antennas, rocket engines, cockpits, and wheels point outward and can rotate in quarter turns. Wheels are 4 units in diameter and 2 units wide, beginning after a 0.5-unit axle extension.
+- Widgets snap to a free node face. Antennas, rocket engines, maneuvering thrusters, repulsor pads, cockpits, and wheels point outward and can rotate in quarter turns. Wheels are 4 units in diameter and 2 units wide, beginning after a 0.5-unit axle extension.
+- A thruster's exhaust points outward and its force vector points inward, opposite its attachment normal. Repulsor pads push outward along their attachment normal, making downward-facing pads usable for hover layouts.
+- Main engines use a wheel-sized 4-unit-diameter, 2-unit-long body plus a 1.25-unit flared exhaust funnel. Compact thrusters remain the maneuvering and stabilization option.
+- Cockpits use a roughly conical 3-unit (2-meter) body. The nose points forward along the attachment normal, a dark raised viewport marks the rolled up direction, and a named camera lens identifies the future runtime camera mount in OBJ/glTF exports.
+- Physics-ready scene data can store `massKg` on individual nodes/widgets and scene-level material density, default node mass, and panel thickness. `calculateMassProperties` derives total mass and center of mass in construction units and meters for runtime export.
 - Widget placement, rotation, and assembly pasting reject overlapping widget collision volumes while allowing tangential contact.
 - Hidden layers remain structurally active and are included in OBJ and glTF exports.
 

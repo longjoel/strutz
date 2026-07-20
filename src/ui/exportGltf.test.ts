@@ -16,7 +16,11 @@ describe("glTF export materials", () => {
     panel.name = "panel_panel-id";
     const widget = new Mesh();
     widget.name = "widget_antenna_widget-id";
-    object.add(node, strut, panel, widget);
+    const viewport = new Mesh();
+    viewport.name = "widget_cockpit-viewport_cockpit-id";
+    const camera = new Mesh();
+    camera.name = "widget_cockpit-camera_cockpit-id";
+    object.add(node, strut, panel, widget, viewport, camera);
 
     applySceneMaterials(object, scene());
 
@@ -24,6 +28,8 @@ describe("glTF export materials", () => {
     expect(material(strut).color.getHexString()).toBe(SCENE_COLORS.planarCornerStrut.slice(1));
     expect(material(panel).color.getHexString()).toBe(SCENE_COLORS.panel.slice(1));
     expect(material(widget).color.getHexString()).toBe(SCENE_COLORS.widget.slice(1));
+    expect(material(viewport).color.getHexString()).toBe(SCENE_COLORS.cockpitViewport.slice(1));
+    expect(material(camera).color.getHexString()).toBe(SCENE_COLORS.cockpitCamera.slice(1));
     expect(material(node).side).toBe(FrontSide);
     expect(material(panel).side).toBe(DoubleSide);
   });
@@ -78,6 +84,13 @@ function scene(): SceneData {
         kind: "antenna",
         nodeId: "node-id",
         face: "top",
+        rotation: 0,
+      },
+      "cockpit-id": {
+        id: "cockpit-id",
+        kind: "cockpit",
+        nodeId: "node-id",
+        face: "front",
         rotation: 0,
       },
     },
