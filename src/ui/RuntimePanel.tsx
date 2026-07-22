@@ -6,11 +6,13 @@ export function RuntimePanel({
   selectedNodeIds,
   selectedWidgetIds,
   onChange,
+  embedded = false,
 }: {
   scene: SceneData;
   selectedNodeIds: Set<string>;
   selectedWidgetIds: Set<string>;
   onChange: (update: (scene: SceneData) => SceneData) => void;
+  embedded?: boolean;
 }) {
   const runtime = { ...DEFAULT_VEHICLE_RUNTIME_SETTINGS, ...scene.runtime };
   const physics = { ...DEFAULT_PHYSICS_SETTINGS, ...scene.physics };
@@ -25,7 +27,7 @@ export function RuntimePanel({
   }));
 
   return (
-    <aside style={panelStyle}>
+    <aside style={{ ...panelStyle, width: embedded ? "100%" : 230, borderLeft: embedded ? 0 : "1px solid #254368" }}>
       <div style={headingStyle}>GODOT PHYSICS</div>
       <NumberField label="Density kg/m³" value={physics.materialDensityKgPerM3} onChange={(value) => onChange((current) => ({ ...current, physics: { ...current.physics, materialDensityKgPerM3: value } }))} />
       <NumberField label="Default node kg" value={physics.defaultNodeMassKg} onChange={(value) => onChange((current) => ({ ...current, physics: { ...current.physics, defaultNodeMassKg: value } }))} />
@@ -85,7 +87,7 @@ function CheckField({ label, value, onChange }: { label: string; value: boolean;
   return <label style={fieldStyle}><span>{label}</span><input type="checkbox" checked={value} onChange={(event) => onChange(event.target.checked)} /></label>;
 }
 
-const panelStyle: React.CSSProperties = { width: 230, flexShrink: 0, padding: 8, overflowY: "auto", background: "#10192d", borderLeft: "1px solid #254368", color: "#d7e7f0", fontSize: 11 };
+const panelStyle: React.CSSProperties = { height: "100%", minHeight: 0, flexShrink: 0, padding: 8, overflowY: "auto", background: "#10192d", color: "#d7e7f0", fontSize: 11, boxSizing: "border-box" };
 const headingStyle: React.CSSProperties = { fontSize: 12, fontWeight: 750, letterSpacing: 0.5, marginBottom: 8 };
 const subheadingStyle: React.CSSProperties = { marginTop: 10, marginBottom: 5, paddingTop: 7, borderTop: "1px solid #254368", color: "#9bc8d8", fontWeight: 700 };
 const fieldStyle: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, minHeight: 28 };

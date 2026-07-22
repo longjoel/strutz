@@ -15,7 +15,11 @@ import type { StrutDrawMode, Tool } from "./types";
 import type { SceneData, WidgetKind } from "../core/types";
 import { Scene } from "./Scene";
 import { matchCameraView, moveOrbitFocus, type CameraMode } from "./camera";
-import { CONSTRUCTION_GRID_Y } from "./viewportConfig";
+import {
+  CONSTRUCTION_GRID_Y,
+  GRID_FADE_DISTANCE,
+  VIEWPORT_FAR_DISTANCE,
+} from "./viewportConfig";
 import type { AssemblyClipboard } from "../core/composition";
 
 interface ViewportProps {
@@ -120,7 +124,7 @@ export function Viewport({
 
   return (
     <div
-      style={{ flex: 1, position: "relative" }}
+      style={{ flex: 1, minWidth: 0, position: "relative" }}
       onContextMenu={(event) => event.preventDefault()}
     >
       <Canvas
@@ -135,7 +139,7 @@ export function Viewport({
           position={INITIAL_CAMERA_POSITION}
           fov={50}
           near={0.1}
-          far={5000}
+          far={VIEWPORT_FAR_DISTANCE}
         />
         <OrthographicCamera
           ref={registerOrthographicCamera}
@@ -143,7 +147,7 @@ export function Viewport({
           position={INITIAL_CAMERA_POSITION}
           zoom={50}
           near={-5000}
-          far={5000}
+          far={VIEWPORT_FAR_DISTANCE}
         />
         <ambientLight intensity={0.5} />
         <directionalLight
@@ -162,7 +166,7 @@ export function Viewport({
           sectionSize={4}
           sectionThickness={1.2}
           sectionColor="#6883a0"
-          fadeDistance={100}
+          fadeDistance={GRID_FADE_DISTANCE}
           infiniteGrid
           followCamera
           position={[0.5, CONSTRUCTION_GRID_Y, 0.5]}

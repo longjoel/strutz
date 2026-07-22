@@ -1,7 +1,7 @@
 import { useRef, useCallback, useState, useEffect, useMemo } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import * as THREE from "three";
-import { ThreeEvent, useThree } from "@react-three/fiber";
+import { ThreeEvent, useFrame, useThree } from "@react-three/fiber";
 import { Edges, Html } from "@react-three/drei";
 import type { StrutDrawMode, Tool } from "./types";
 import type {
@@ -71,7 +71,11 @@ import {
   type AssemblyClipboard,
   type RotationMatrix,
 } from "../core/composition";
-import { GROUND_PLANE_Y } from "./viewportConfig";
+import {
+  getBuildSurfaceCenter,
+  GROUND_PLANE_SIZE,
+  GROUND_PLANE_Y,
+} from "./viewportConfig";
 import {
   getFaceForAxisLock,
   getNearestStructuralDrawCandidate,
@@ -1448,14 +1452,21 @@ function GroundPlane({
   onClick: (event: ThreeEvent<MouseEvent>) => void;
   onPointerMove: (event: ThreeEvent<PointerEvent>) => void;
 }) {
+  const meshRef = useRef<THREE.Mesh>(null);
+  useFrame(({ camera }) => {
+    if (!meshRef.current) return;
+    const center = getBuildSurfaceCenter(camera.position);
+    meshRef.current.position.set(center.x, center.y, center.z);
+  });
   return (
     <mesh
+      ref={meshRef}
       rotation={[-Math.PI / 2, 0, 0]}
       position={[0, GROUND_PLANE_Y, 0]}
       onClick={interactive ? onClick : undefined}
       onPointerMove={interactive ? onPointerMove : undefined}
     >
-      <planeGeometry args={[200, 200]} />
+      <planeGeometry args={[GROUND_PLANE_SIZE, GROUND_PLANE_SIZE]} />
       <meshBasicMaterial
         color="#f7f9fc"
         transparent

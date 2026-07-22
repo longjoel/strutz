@@ -14,6 +14,7 @@ export function LayersPanel({
   onDelete,
   onSelectContents,
   onMoveSelection,
+  embedded = false,
 }: {
   scene: SceneData;
   activeLayerId: string;
@@ -25,14 +26,16 @@ export function LayersPanel({
   onDelete: (layerId: string) => void;
   onSelectContents: (layerId: string) => void;
   onMoveSelection: (layerId: string) => void;
+  embedded?: boolean;
 }) {
   const layers = scene.layers ?? [];
   return (
     <aside style={{
-      width: 230,
+      width: embedded ? "100%" : 230,
+      height: "100%",
       flexShrink: 0,
       background: "#111b31",
-      borderLeft: "1px solid #254368",
+      borderLeft: embedded ? 0 : "1px solid #254368",
       color: "#d7e7f0",
       display: "flex",
       flexDirection: "column",

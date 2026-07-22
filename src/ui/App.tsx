@@ -41,6 +41,7 @@ import {
 import { exportSceneStl } from "../core/exportStl";
 import { PrintExportDialog } from "./PrintExportDialog";
 import { RuntimePanel } from "./RuntimePanel";
+import { InspectorDock } from "./InspectorDock";
 
 interface HistoryState {
   past: SceneData[];
@@ -600,7 +601,7 @@ export function App() {
         onPreviewPanel={setPanelPreviewSide}
         onExportGodot={() => void exportGodot()}
       />
-      <div style={{ display: "flex", flex: 1, minHeight: 0, position: "relative" }}>
+      <div style={{ display: "flex", flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden", position: "relative" }}>
         <Viewport
           activeTool={activeTool}
           selectedWidgetKind={selectedWidgetKind}
@@ -624,38 +625,42 @@ export function App() {
           onCommitPaste={commitPaste}
           panelPreviewSide={panelPreviewSide}
         />
-        <LayersPanel
-          scene={sceneData}
-          activeLayerId={activeLayerId}
-          hasSelection={hasSelection}
-          onActivate={activateLayer}
-          onToggleVisibility={toggleLayerVisibility}
-          onCreate={createLayer}
-          onRename={(layerId, name) => setSceneData((scene) => renameLayerInScene(scene, layerId, name))}
-          onDelete={(layerId) => {
-            setSceneData((scene) => {
-              const deleted = deleteLayerFromScene(scene, layerId);
-              return activeLayerId === layerId
-                ? setLayerVisibilityInScene(deleted, DEFAULT_LAYER_ID, true)
-                : deleted;
-            });
-            if (activeLayerId === layerId) setActiveLayerId(DEFAULT_LAYER_ID);
-          }}
-          onSelectContents={(layerId) => {
-            const next = selectLayerContents(sceneData, layerId);
-            setSelectedNodeIds(next.nodeIds);
-            setSelectedStrutIds(next.strutIds);
-            setSelectedPanelIds(next.panelIds);
-            setSelectedWidgetIds(next.widgetIds);
-          }}
-          onMoveSelection={(layerId) => setSceneData((scene) =>
-            assignSelectionToLayer(scene, selection, layerId))}
-        />
-        <RuntimePanel
-          scene={sceneData}
-          selectedNodeIds={selectedNodeIds}
-          selectedWidgetIds={selectedWidgetIds}
-          onChange={setSceneData}
+        <InspectorDock
+          layers={<LayersPanel
+            embedded
+            scene={sceneData}
+            activeLayerId={activeLayerId}
+            hasSelection={hasSelection}
+            onActivate={activateLayer}
+            onToggleVisibility={toggleLayerVisibility}
+            onCreate={createLayer}
+            onRename={(layerId, name) => setSceneData((scene) => renameLayerInScene(scene, layerId, name))}
+            onDelete={(layerId) => {
+              setSceneData((scene) => {
+                const deleted = deleteLayerFromScene(scene, layerId);
+                return activeLayerId === layerId
+                  ? setLayerVisibilityInScene(deleted, DEFAULT_LAYER_ID, true)
+                  : deleted;
+              });
+              if (activeLayerId === layerId) setActiveLayerId(DEFAULT_LAYER_ID);
+            }}
+            onSelectContents={(layerId) => {
+              const next = selectLayerContents(sceneData, layerId);
+              setSelectedNodeIds(next.nodeIds);
+              setSelectedStrutIds(next.strutIds);
+              setSelectedPanelIds(next.panelIds);
+              setSelectedWidgetIds(next.widgetIds);
+            }}
+            onMoveSelection={(layerId) => setSceneData((scene) =>
+              assignSelectionToLayer(scene, selection, layerId))}
+          />}
+          physics={<RuntimePanel
+            embedded
+            scene={sceneData}
+            selectedNodeIds={selectedNodeIds}
+            selectedWidgetIds={selectedWidgetIds}
+            onChange={setSceneData}
+          />}
         />
         <div
           style={{

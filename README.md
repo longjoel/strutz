@@ -99,6 +99,7 @@ The generated `RigidBody3D` accepts an API-only normalized command dictionary th
 The formal domain contract, including terminology, validation APIs, and edge cases, is in [docs/construction-rules.md](docs/construction-rules.md). See [docs/architecture.md](docs/architecture.md) before extending the editor.
 
 - Nodes are unit cubes centered on the grid.
+- The grid and interaction ground share the build surface at the bottom of Y=0 nodes, so placed structures sit directly on the visible plane.
 - Each node face can hold one attachment: a strut or a widget.
 - Straight struts connect opposite faces along one axis only.
 - Starting a straight strut from one of several selected nodes previews and places the same length from every selected node as one undoable operation.

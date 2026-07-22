@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import { matchCameraView, moveOrbitFocus, worldUnitsPerNdc } from "./camera";
-import { CONSTRUCTION_GRID_Y, GROUND_PLANE_Y } from "./viewportConfig";
+import {
+  BUILD_SURFACE_Y,
+  CONSTRUCTION_GRID_Y,
+  getBuildSurfaceCenter,
+  GROUND_PLANE_SIZE,
+  GROUND_PLANE_Y,
+  VIEWPORT_FAR_DISTANCE,
+} from "./viewportConfig";
 
 describe("viewport camera behavior", () => {
   it("moves the camera and orbit target together", () => {
@@ -31,7 +38,16 @@ describe("viewport camera behavior", () => {
     expect(restored.position.distanceTo(target)).toBeCloseTo(10);
   });
 
-  it("keeps the construction grid one unit above the ground plane", () => {
-    expect(CONSTRUCTION_GRID_Y - GROUND_PLANE_Y).toBe(1);
+  it("keeps the construction grid and ground on one build surface", () => {
+    expect(GROUND_PLANE_Y).toBe(BUILD_SURFACE_Y);
+    expect(CONSTRUCTION_GRID_Y - GROUND_PLANE_Y).toBeCloseTo(0.002);
+    expect(BUILD_SURFACE_Y).toBe(-0.5);
+  });
+
+  it("keeps the ground footprint centered under the camera through the far clip", () => {
+    expect(getBuildSurfaceCenter({ x: 240, z: -180 })).toEqual({
+      x: 240, y: BUILD_SURFACE_Y, z: -180,
+    });
+    expect(GROUND_PLANE_SIZE / 2).toBe(VIEWPORT_FAR_DISTANCE);
   });
 });
