@@ -84,6 +84,7 @@ import {
   type StructuralDrawAxis,
 } from "./structuralDraw";
 import { createStrutSurface, triangulateQuadSurface } from "../core/geometry";
+import { toggleSelectionId } from "./selection";
 
 const FACE_COLORS: Record<string, string> = {
   top: "#4ecca3",
@@ -433,17 +434,6 @@ export function Scene({
       const clickedNode = sceneDataRef.current.nodes[nodeId];
       if (clickedNode) onFocusPoint(clickedNode.position);
 
-      if (event.nativeEvent.shiftKey) {
-        event.stopPropagation();
-        setSelectedNodeIds((prev) => {
-          const next = new Set(prev);
-          if (next.has(nodeId)) next.delete(nodeId);
-          else next.add(nodeId);
-          return next;
-        });
-        return;
-      }
-
       if (activeTool === "draw-strut") {
         event.stopPropagation();
 
@@ -562,10 +552,14 @@ export function Scene({
       event.stopPropagation();
       event.nativeEvent.preventDefault();
 
-      setSelectedNodeIds(new Set([nodeId]));
-      setSelectedStrutIds(new Set());
-      setSelectedPanelIds(new Set());
-      setSelectedWidgetIds(new Set());
+      if (event.nativeEvent.shiftKey) {
+        setSelectedNodeIds((current) => toggleSelectionId(current, nodeId));
+      } else {
+        setSelectedNodeIds(new Set([nodeId]));
+        setSelectedStrutIds(new Set());
+        setSelectedPanelIds(new Set());
+        setSelectedWidgetIds(new Set());
+      }
       const node = sceneDataRef.current.nodes[nodeId];
       if (node) onFocusPoint(node.position);
     },
@@ -577,10 +571,14 @@ export function Scene({
       event.stopPropagation();
       event.nativeEvent.preventDefault();
 
-      setSelectedNodeIds(new Set());
-      setSelectedStrutIds(new Set([strutId]));
-      setSelectedPanelIds(new Set());
-      setSelectedWidgetIds(new Set());
+      if (event.nativeEvent.shiftKey) {
+        setSelectedStrutIds((current) => toggleSelectionId(current, strutId));
+      } else {
+        setSelectedNodeIds(new Set());
+        setSelectedStrutIds(new Set([strutId]));
+        setSelectedPanelIds(new Set());
+        setSelectedWidgetIds(new Set());
+      }
       setDrawState(null);
       onFocusPoint(event.point);
     },
@@ -589,18 +587,6 @@ export function Scene({
 
   const handleStrutClick = useCallback(
     (strutId: string, point: THREE.Vector3, event: ThreeEvent<MouseEvent>) => {
-      if (event.nativeEvent.shiftKey) {
-        event.stopPropagation();
-        onFocusPoint(point);
-        setSelectedStrutIds((prev) => {
-          const next = new Set(prev);
-          if (next.has(strutId)) next.delete(strutId);
-          else next.add(strutId);
-          return next;
-        });
-        return;
-      }
-
       if (activeTool !== "draw-strut") return;
       event.stopPropagation();
 
@@ -740,19 +726,8 @@ export function Scene({
   );
 
   const handlePanelClick = useCallback(
-    (panelId: string, event: ThreeEvent<MouseEvent>) => {
-      if (!event.nativeEvent.shiftKey) return;
-
-      event.stopPropagation();
-      onFocusPoint(event.point);
-      setSelectedPanelIds((prev) => {
-        const next = new Set(prev);
-        if (next.has(panelId)) next.delete(panelId);
-        else next.add(panelId);
-        return next;
-      });
-    },
-    [onFocusPoint],
+    (_panelId: string, _event: ThreeEvent<MouseEvent>) => undefined,
+    [],
   );
 
   const handlePanelContextMenu = useCallback(
@@ -760,38 +735,36 @@ export function Scene({
       event.stopPropagation();
       event.nativeEvent.preventDefault();
 
-      setSelectedNodeIds(new Set());
-      setSelectedStrutIds(new Set());
-      setSelectedPanelIds(new Set([panelId]));
-      setSelectedWidgetIds(new Set());
+      if (event.nativeEvent.shiftKey) {
+        setSelectedPanelIds((current) => toggleSelectionId(current, panelId));
+      } else {
+        setSelectedNodeIds(new Set());
+        setSelectedStrutIds(new Set());
+        setSelectedPanelIds(new Set([panelId]));
+        setSelectedWidgetIds(new Set());
+      }
       onFocusPoint(event.point);
     },
     [onFocusPoint],
   );
 
   const handleWidgetClick = useCallback(
-    (widgetId: string, event: ThreeEvent<MouseEvent>) => {
-      if (!event.nativeEvent.shiftKey) return;
-      event.stopPropagation();
-      onFocusPoint(event.point);
-      setSelectedWidgetIds((prev) => {
-        const next = new Set(prev);
-        if (next.has(widgetId)) next.delete(widgetId);
-        else next.add(widgetId);
-        return next;
-      });
-    },
-    [onFocusPoint],
+    (_widgetId: string, _event: ThreeEvent<MouseEvent>) => undefined,
+    [],
   );
 
   const handleWidgetContextMenu = useCallback(
     (widgetId: string, event: ThreeEvent<MouseEvent>) => {
       event.stopPropagation();
       event.nativeEvent.preventDefault();
-      setSelectedNodeIds(new Set());
-      setSelectedStrutIds(new Set());
-      setSelectedPanelIds(new Set());
-      setSelectedWidgetIds(new Set([widgetId]));
+      if (event.nativeEvent.shiftKey) {
+        setSelectedWidgetIds((current) => toggleSelectionId(current, widgetId));
+      } else {
+        setSelectedNodeIds(new Set());
+        setSelectedStrutIds(new Set());
+        setSelectedPanelIds(new Set());
+        setSelectedWidgetIds(new Set([widgetId]));
+      }
       onFocusPoint(event.point);
     },
     [onFocusPoint],

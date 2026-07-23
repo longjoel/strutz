@@ -18,7 +18,7 @@ Strutz is an experimental 3D construction editor for building node-and-strut ass
 - Use valid strut lengths of `1`, `3`, and `7`.
 - Use Structural struts for straight axis-aligned connections and External struts for routed connections between perpendicular faces.
 - Subdivide straight struts by inserting nodes.
-- Select any part with right-click and extend the selection with `Shift`+left-click.
+- Select any part with right-click and toggle additional parts with `Shift`+right-click.
 - Delete selected parts with `Delete` or `Backspace`; placed nodes are not repositionable.
 - Undo/redo scene edits.
 - Organize parts into named layers from the right sidebar; each layer can be shown or hidden without changing construction or export behavior.
@@ -73,7 +73,7 @@ npm run typecheck
 - During a Structural draw, `1`/`3`/`7`: Place that clear strut length
 - Right-click a part: select only that part
 - Right-click one strut, then choose `Select Loop`: select its shortest containing closed loop
-- `Shift`+left-click parts: toggle multi-selection
+- `Shift`+right-click parts: toggle multi-selection without clearing other selected part types
 - `Esc`: Clear selection or cancel drawing
 - `Ctrl+Z`: Undo
 - `Ctrl+Shift+Z`/`Ctrl+Y`: Redo
